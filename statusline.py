@@ -24,8 +24,12 @@ import os
 import re
 import json
 import time
+import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 def _env(name, default):
@@ -129,7 +133,7 @@ if not used_rl:
         L5H = float(_env("5H_LIMIT", "50"))
         LWEEK = float(_env("WEEK_LIMIT", "500"))
         out = subprocess.run(
-            ["ccusage", "blocks", "--json"],
+            [shutil.which("ccusage") or "ccusage", "blocks", "--json"],
             capture_output=True, text=True, timeout=15,
         ).stdout
         blocks = (json.loads(out) or {}).get("blocks", [])
