@@ -16,6 +16,26 @@ Colors: green → under target, yellow at 60%+, red + ⚠️ at 85%+.
 Everything comes straight from the JSON payload Claude Code pipes to the statusline on
 every render, so it's always current — no background jobs, no log parsing.
 
+## Keeping context lean (why the 100k target)
+
+The `🧠 ctx` segment is colored against a **100k-token soft target** on purpose: quality
+and speed degrade as the context fills, so it's worth **clearing context around 100k**
+rather than letting a session sprawl. The segment goes yellow as you approach it and
+red + ⚠️ once you cross it — that's your cue to wrap up the current thread.
+
+To clear context *without losing your place*, hand off to a fresh session with the
+**[`/handoff`](https://github.com/mattpocock/skills/tree/main/skills/productivity/handoff)**
+skill (by [@mattpocock](https://github.com/mattpocock)). It compacts the conversation
+into a handoff document — referencing existing specs/plans/commits rather than restating
+them, and redacting secrets — so the next session picks up exactly where you left off.
+Invoke it with a short description of what the next session should focus on:
+
+```
+/handoff finish wiring the settings.json snippet and publish the repo
+```
+
+Then start a new session (`/clear` or a fresh window) and point it at the handoff doc.
+
 ## Works on any subscription
 
 The **5h / 7d percentages come straight from Claude Code** (`rate_limits.used_percentage`),
