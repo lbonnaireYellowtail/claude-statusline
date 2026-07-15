@@ -3,18 +3,40 @@
 A one-line statusline for Claude Code that shows, in real time:
 
 ```
-🧠 ctx 62.7k (6%) | 🕐 5h 0% →4h55m | 📅 7d 10% →53h15m | 🤖 Opus 4.8 (1M context)
+🧠 ctx 62.7k (6%) | 🕐 5h 12% →4h55m | 📅 7d 10% →53h15m ⇄ | 🤖 Opus 4.8 (1M context)
 ```
 
 - **🧠 ctx** — context tokens used, colored against a soft target (default 100k) so you
   can keep sessions lean. The `(6%)` is the real fill of the full context window.
-- **🕐 5h / 📅 7d** — your actual Anthropic rate-limit usage, with time-until-reset.
+- **🕐 5h / 📅 7d** — your actual Anthropic rate-limit usage, with time-until-reset —
+  **kept in sync across all your open terminals** (see below).
+- **⇄** — shown when the rate-limit numbers came from another, more active session.
 - **🤖** — the active model.
 
 Colors: green → under target, yellow at 60%+, red + ⚠️ at 85%+.
 
 Everything comes straight from the JSON payload Claude Code pipes to the statusline on
 every render, so it's always current — no background jobs, no log parsing.
+
+## Cross-terminal sync (v1.1)
+
+Rate limits are account-level, but Claude Code only refreshes a session's statusline
+when *that session* is active — so with several terminals open, the idle ones show
+stale 5h/7d numbers while another session burns tokens.
+
+Claude Code has no cross-session push, so this script syncs pull-based:
+
+- The session that receives fresher `rate_limits` publishes them to
+  `~/.cache/claude-statusline/shared-rate-limits.json`.
+- Sessions holding staler data render from that file instead, marked with a dim `⇄`.
+- Freshness comes from the data itself — `(resets_at, used_percentage)` per window
+  never decreases for an account — so concurrent writers can never regress the cache.
+  No locks, no per-session state files.
+
+Combined with the `refreshInterval` setting (see install snippet), idle terminals pick
+up any active session's update within a couple of seconds. An idle tick costs ~44 ms
+(mostly Python startup); the cache is only written when the numbers actually advanced.
+Context tokens and model stay per-session — those aren't shared state.
 
 ## Keeping context lean (why the 100k target)
 
@@ -81,11 +103,18 @@ Both print the `settings.json` snippet to paste in (shown below).
 "statusLine": {
   "type": "command",
   "command": "$HOME/.claude/scripts/statusline.py",
-  "padding": 0
+  "padding": 0,
+  "refreshInterval": 2
 }
 ```
 
 Start a new Claude Code session (or reload) to see it.
+
+`refreshInterval` re-runs the statusline every N seconds even when a session is idle —
+that's what lets idle terminals pull synced rate limits. It needs Claude Code with
+statusline timer support; on older versions the key is ignored and the statusline stays
+event-driven (sync still works, idle terminals just update on their next event). Drop it
+to `1` for snappier propagation at roughly double the (small) idle cost.
 
 ## Config (optional env vars)
 
@@ -108,3 +137,6 @@ The legacy `CCUSAGE_*` names are still honored for backward compatibility.
 - **`$HOME` not expanding:** replace it with your full absolute path in `settings.json`.
 - **5h/7d missing:** you're on an older Claude Code; either upgrade, or `npm i -g ccusage`
   to enable the estimated-dollars fallback.
+- **⇄ never appears / sync seems off:** the shared cache lives at
+  `~/.cache/claude-statusline/` — delete it to reset. Sessions opened before you added
+  `refreshInterval` to settings.json need a restart to start polling.

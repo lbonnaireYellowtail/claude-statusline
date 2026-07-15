@@ -28,7 +28,8 @@ cat <<'EOF'
   "statusLine": {
     "type": "command",
     "command": "$HOME/.claude/scripts/statusline.py",
-    "padding": 0
+    "padding": 0,
+    "refreshInterval": 2
   }
 EOF
 echo

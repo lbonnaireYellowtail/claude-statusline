@@ -18,7 +18,18 @@ Config via env vars (legacy CCUSAGE_* names still honored):
   STATUSLINE_CTX_TARGET   soft context-token target for coloring  (default 100000)
   STATUSLINE_CAUTION_PCT  yellow at/above this %                  (default 60)
   STATUSLINE_WARN_PCT     red + warning at/above                  (default 85)
+
+Cross-session sync: rate limits are account-level, but each Claude Code session
+only refreshes its own payload. Whichever session has the freshest rate_limits
+publishes them to ~/.cache/claude-statusline/shared-rate-limits.json; sessions
+holding staler data render from that file instead (marked with a dim ⇄).
+Freshness is derived from the data itself — (resets_at, used_percentage) never
+decreases within an account — so concurrent writers can't regress the cache.
+Pair this with statusLine.refreshInterval in settings.json so idle sessions
+poll the cache.
 """
+__version__ = "1.1.0"
+
 import sys
 import os
 import re
@@ -53,6 +64,60 @@ try:
     data = json.loads(payload)
 except Exception:
     data = {}
+
+CACHE_DIR = os.path.expanduser("~/.cache/claude-statusline")
+SHARED_RL = os.path.join(CACHE_DIR, "shared-rate-limits.json")
+CCUSAGE_CACHE = os.path.join(CACHE_DIR, "ccusage.json")
+
+
+def load_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def atomic_write(path, obj):
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(obj, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def rl_freshness(rl):
+    """Monotone freshness key for a rate_limits blob.
+
+    Within a rate-limit window used_percentage only grows; when a window rolls
+    over, resets_at jumps forward. So (resets_at, pct) per window sorts any two
+    snapshots of the same account by recency, regardless of which session saw
+    them or when.
+    """
+    def num(v):
+        return float(v) if isinstance(v, (int, float)) else -1.0
+
+    key = []
+    for w in ("five_hour", "seven_day"):
+        win = (rl or {}).get(w) or {}
+        key += [num(win.get("resets_at")), num(win.get("used_percentage"))]
+    return key
+
+
+def sync_rate_limits(rl):
+    """Publish rl if it's the freshest known; return (rl_to_render, from_shared)."""
+    shared = load_json(SHARED_RL) or {}
+    shared_rl = shared.get("rate_limits") or {}
+    mine, theirs = rl_freshness(rl), rl_freshness(shared_rl)
+    if mine > theirs:
+        atomic_write(SHARED_RL, {"rate_limits": rl})
+        return rl, False
+    if theirs > mine:
+        return shared_rl, True
+    return rl, False
 
 
 def color_for(pct):
@@ -106,7 +171,7 @@ if ctx_tokens:
     any_warn = any_warn or tgt_pct >= WARN
 
 # ---- rate limits (the real 5h / 7d numbers) ---------------------------------
-rl = data.get("rate_limits") or {}
+rl, from_shared = sync_rate_limits(data.get("rate_limits") or {})
 used_rl = False
 for key, icon, label in (
     ("five_hour", "\U0001f550", "5h"),   # 🕐
@@ -120,6 +185,8 @@ for key, icon, label in (
         parts.append(seg)
         any_warn = any_warn or w
         used_rl = True
+if used_rl and from_shared:
+    parts[-1] += f" {DIM}⇄{RESET}"
 
 # ---- fallback: older Claude Code without rate_limits -> ccusage --------------
 if not used_rl:
@@ -132,10 +199,16 @@ if not used_rl:
     try:
         L5H = float(_env("5H_LIMIT", "50"))
         LWEEK = float(_env("WEEK_LIMIT", "500"))
-        out = subprocess.run(
-            [shutil.which("ccusage") or "ccusage", "blocks", "--json"],
-            capture_output=True, text=True, timeout=15,
-        ).stdout
+        # ccusage is slow; with refreshInterval polling, reuse its output for 60s.
+        cached = load_json(CCUSAGE_CACHE) or {}
+        if time.time() - cached.get("ts", 0) < 60:
+            out = cached.get("out", "")
+        else:
+            out = subprocess.run(
+                [shutil.which("ccusage") or "ccusage", "blocks", "--json"],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+            atomic_write(CCUSAGE_CACHE, {"ts": time.time(), "out": out})
         blocks = (json.loads(out) or {}).get("blocks", [])
         now = datetime.now(timezone.utc)
         week_cutoff = now - timedelta(days=7)
