@@ -310,6 +310,18 @@ class SharedCachePoisonTest(StatuslineTestCase):
         })
         self._assert_legit_won(self.run_statusline(self._legit_payload()))
 
+    def test_poison_inside_wide_bound_is_still_overwritten(self):
+        # resets_at 20 days out: comfortably within any generous flat bound, but
+        # far beyond either window's real horizon (5h / 7d). A per-window bound
+        # must drop it so a legit session still wins; a flat ~30d bound would
+        # leave this poison pinned for weeks.
+        twenty_days = int(time.time()) + 20 * 86400
+        self._seed_cache({
+            "five_hour": {"used_percentage": 100, "resets_at": twenty_days},
+            "seven_day": {"used_percentage": 100, "resets_at": twenty_days},
+        })
+        self._assert_legit_won(self.run_statusline(self._legit_payload()))
+
 
 if __name__ == "__main__":
     unittest.main()

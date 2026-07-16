@@ -58,7 +58,6 @@ CTX_TARGET = float(_env("CTX_TARGET", "100000"))
 GREEN, YELLOW, RED, DIM, RESET = (
     "\033[32m", "\033[33m", "\033[1;31m", "\033[2m", "\033[0m",
 )
-ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 # Printable allowlist for untrusted labels: drop C0 (0x00-0x1F incl.
 # ESC/newline/BEL), DEL (0x7F), and C1 (0x80-0x9F, the 8-bit escape range).
@@ -135,10 +134,13 @@ def rl_freshness(rl):
     return key
 
 
-# Plausibility bound for resets_at: a window may not reset more than ~30 days
-# out. A far-future resets_at is the poison that actually wins the freshness
-# comparison (it sorts first), so bounding it is what restores overwritability.
-_MAX_RESET_HORIZON = 30 * 24 * 3600
+# Plausibility bound for resets_at, PER WINDOW: a rolling window can never
+# reset further out than its own length (plus slack for clock skew / rollover).
+# A far-future resets_at sorts first in the freshness key, so a flat bound wide
+# enough to be safe (e.g. 30d) would still let a poison with resets_at inside
+# that bound win forever and pin a red alarm; keying the bound to each window's
+# real length is what actually makes poison overwritable by a legit session.
+_RESET_HORIZON = {"five_hour": 6 * 3600, "seven_day": 8 * 24 * 3600}
 
 
 def sanitize_rl(rl, now):
@@ -146,8 +148,9 @@ def sanitize_rl(rl, now):
 
     For each of five_hour / seven_day: drop non-finite numbers (rejects NaN and
     Infinity, which json.loads happily accepts), clamp used_percentage to
-    [0,100], and keep resets_at only if it falls in a plausible window
-    (now <= resets_at <= now + ~30d). Any field failing its check is dropped.
+    [0,100], and keep resets_at only if it falls within that window's own
+    plausible horizon (now <= resets_at <= now + horizon). Any field failing
+    its check is dropped.
 
     Applied identically on BOTH sides of the sync — the cache contents on read
     and the live payload before publish — so poison can neither be trusted nor
@@ -165,7 +168,7 @@ def sanitize_rl(rl, now):
             clean["used_percentage"] = max(0.0, min(100.0, float(pct)))
         reset = win.get("resets_at")
         if (isinstance(reset, (int, float)) and math.isfinite(reset)
-                and now <= reset <= now + _MAX_RESET_HORIZON):
+                and now <= reset <= now + _RESET_HORIZON[w]):
             clean["resets_at"] = float(reset)
         if clean:
             out[w] = clean
@@ -281,7 +284,8 @@ if not used_rl:
                 capture_output=True, text=True, timeout=15,
             ).stdout
             atomic_write(CCUSAGE_CACHE, {"ts": time.time(), "out": out})
-        blocks = (json.loads(out) or {}).get("blocks", [])
+        parsed = json.loads(out)
+        blocks = parsed.get("blocks", []) if isinstance(parsed, dict) else []
         now = datetime.now(timezone.utc)
         week_cutoff = now - timedelta(days=7)
         block_5h = week = 0.0

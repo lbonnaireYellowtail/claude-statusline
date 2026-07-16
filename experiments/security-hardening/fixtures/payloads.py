@@ -63,4 +63,11 @@ POISON_FIXTURES = [
         "five_hour": {"used_percentage": 99.0, "resets_at": NOW + 3650 * 86400},
         "seven_day": {"used_percentage": 99.0, "resets_at": NOW + 3650 * 86400},
     }),
+    # resets_at 20 days out: within a generous flat bound (~30d) but far beyond
+    # either window's real horizon. Only a per-window bound drops it; a flat
+    # bound would leave this poison winning the freshness key for weeks.
+    ("within_wide_bound_reset", {
+        "five_hour": {"used_percentage": 100.0, "resets_at": NOW + 20 * 86400},
+        "seven_day": {"used_percentage": 100.0, "resets_at": NOW + 20 * 86400},
+    }),
 ]
