@@ -59,6 +59,17 @@ GREEN, YELLOW, RED, DIM, RESET = (
 )
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
+# Printable allowlist for untrusted labels: drop C0 (0x00-0x1F incl.
+# ESC/newline/BEL), DEL (0x7F), and C1 (0x80-0x9F, the 8-bit escape range).
+# Whatever survives is inert text that cannot steer the terminal (CWE-150).
+_LABEL_DISALLOWED = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def sanitize_label(name, limit=64):
+    """Allowlist an untrusted label to printable characters, length-bounded."""
+    cleaned = _LABEL_DISALLOWED.sub("", str(name))
+    return cleaned[:limit] if cleaned else "?"
+
 payload = sys.stdin.read()
 try:
     data = json.loads(payload)
@@ -235,7 +246,7 @@ if not used_rl:
 
 # ---- model (last) -----------------------------------------------------------
 md = data.get("model") or {}
-parts.append(f"\U0001f916 {md.get('display_name') or md.get('id') or '?'}")
+parts.append(f"\U0001f916 {sanitize_label(md.get('display_name') or md.get('id') or '?')}")
 
 prefix = "⚠️  " if any_warn else ""
 print(prefix + " | ".join(parts))

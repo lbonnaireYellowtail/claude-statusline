@@ -7,20 +7,6 @@
 
 ## Ready
 
-### [CS-001] Sanitize model.display_name to block terminal escape injection
-**Priority:** high
-
-Acceptance criteria:
-- [ ] Sanitize the model label via a **printable allowlist** (drop C0 `\x00-\x1f`, DEL `\x7f`, and C1 `\x80-\x9f`), applied at statusline.py:238 to **both** `model.display_name` **and** the `model.id` fallback (same f-string sink), length-bounded
-- [ ] Adversarial payloads render as inert text: `\x1b]0;X\x07\x1b[2J\x1b[31mEVIL` (OSC+clear+color), a `\n`-injected second line, `\x9b31m` (C1 8-bit CSI), and `\x1b]52;c;...\x07` (OSC 52 clipboard)
-- [ ] Legitimate names (e.g. "Opus 4.8 (1M context)") render byte-for-byte unchanged
-- [ ] Add a regression test covering the OSC, newline, C1, and OSC-52 payloads on both `display_name` and `id`
-
-Notes:
-F1 in SECURITY-ANALYSIS.md — Medium. Ping-pong (ADR-0001) confirmed **two** raw sinks, not one: line 238 is `md.get('display_name') or md.get('id') or '?'`. The compiled line-60 ANSI regex matches only SGR colours — it leaves clear/OSC/C1/C0 intact (proven in experiments/security-hardening), so **allowlist, not blocklist**. Reference impl: `fixed_display()` in that experiment. Class = CWE-150 (cf. CVE-2025-55754 Tomcat, CVE-2025-55193 Rails).
-
----
-
 ### [CS-002] Guard against valid-but-non-object JSON to prevent crash
 **Priority:** high
 
@@ -67,6 +53,22 @@ Ships alongside CS-001..CS-003 as the v1.1.1 hardening release. Cross-reference 
 ## Blocked
 
 ## Done
+
+### [CS-001] Sanitize model.display_name to block terminal escape injection
+**Priority:** high
+
+Acceptance criteria:
+- [x] Sanitize the model label via a **printable allowlist** (drop C0 `\x00-\x1f`, DEL `\x7f`, and C1 `\x80-\x9f`), applied at statusline.py:238 to **both** `model.display_name` **and** the `model.id` fallback (same f-string sink), length-bounded
+- [x] Adversarial payloads render as inert text: `\x1b]0;X\x07\x1b[2J\x1b[31mEVIL` (OSC+clear+color), a `\n`-injected second line, `\x9b31m` (C1 8-bit CSI), and `\x1b]52;c;...\x07` (OSC 52 clipboard)
+- [x] Legitimate names (e.g. "Opus 4.8 (1M context)") render byte-for-byte unchanged
+- [x] Add a regression test covering the OSC, newline, C1, and OSC-52 payloads on both `display_name` and `id`
+
+Notes:
+F1 in SECURITY-ANALYSIS.md — Medium. Ping-pong (ADR-0001) confirmed **two** raw sinks, not one: line 238 is `md.get('display_name') or md.get('id') or '?'`. The compiled line-60 ANSI regex matches only SGR colours — it leaves clear/OSC/C1/C0 intact (proven in experiments/security-hardening), so **allowlist, not blocklist**. Reference impl: `fixed_display()` in that experiment. Class = CWE-150 (cf. CVE-2025-55754 Tomcat, CVE-2025-55193 Rails).
+
+Done: added `sanitize_label()` (printable allowlist, 64-char bound, `?` fallback) in statusline.py and applied it to the combined `display_name or id or '?'` sink. Regression tests in `ModelLabelInjectionTest` cover all four payloads on both `display_name` and `id` (asserting the model-label region is free of ESC/BEL/newline/C1 bytes) plus a legit-name-unchanged case.
+
+---
 
 ### [CS-005] Bootstrap a stdlib-only regression test harness
 **Priority:** high

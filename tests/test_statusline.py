@@ -106,5 +106,60 @@ class SmokeTest(StatuslineTestCase):
         self.assertIn("ctx", result.stdout)
 
 
+class ModelLabelInjectionTest(StatuslineTestCase):
+    """CS-001: the model label is an untrusted stdin field that reaches the
+    terminal verbatim. Adversarial control sequences must render as inert text.
+
+    Both sinks share one expression (display_name or id or '?'), so each payload
+    is exercised on display_name and, separately, on the id fallback.
+    """
+
+    # Bytes that must never survive into the rendered line: ESC (0x1b),
+    # BEL (0x07), newline/CR, and the C1 8-bit escape range (0x80-0x9f).
+    _FORBIDDEN = ["\x1b", "\x07", "\n", "\r"] + [chr(c) for c in range(0x80, 0xA0)]
+
+    _PAYLOADS = {
+        "osc_clear_color": "\x1b]0;X\x07\x1b[2J\x1b[31mEVIL",
+        "newline_injection": "line1\nline2",
+        "c1_csi": "\x9b31mEVIL",
+        "osc52_clipboard": "\x1b]52;c;ZXZpbA==\x07",
+    }
+
+    def _assert_inert(self, result):
+        # The statusline legitimately emits SGR colour codes (ESC) for the
+        # gauges and a trailing newline from print(); the model label is the
+        # only untrusted region. Isolate it (everything after the 🤖 marker,
+        # which is used for nothing else) and assert IT carries no control
+        # bytes — an escape/newline that survived sanitizing would land here.
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("\U0001f916 ", result.stdout)
+        label = result.stdout.split("\U0001f916 ", 1)[1].rstrip("\n")
+        for ch in self._FORBIDDEN:
+            self.assertNotIn(
+                ch, label,
+                msg=f"forbidden byte {ch!r} leaked into model label: {label!r}",
+            )
+
+    def test_display_name_payloads_are_neutralized(self):
+        for name, evil in self._PAYLOADS.items():
+            with self.subTest(field="display_name", payload=name):
+                result = self.run_statusline({"model": {"display_name": evil}})
+                self._assert_inert(result)
+
+    def test_id_fallback_payloads_are_neutralized(self):
+        # display_name absent -> the id fallback becomes the sink.
+        for name, evil in self._PAYLOADS.items():
+            with self.subTest(field="id", payload=name):
+                result = self.run_statusline({"model": {"id": evil}})
+                self._assert_inert(result)
+
+    def test_legitimate_name_renders_unchanged(self):
+        result = self.run_statusline(
+            {"model": {"display_name": "Opus 4.8 (1M context)"}}
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("Opus 4.8 (1M context)", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
