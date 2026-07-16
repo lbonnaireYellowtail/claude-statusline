@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 # Repo root is the parent of this tests/ directory; statusline.py lives there.
@@ -221,6 +222,93 @@ class NonObjectJsonTest(StatuslineTestCase):
         self.assertIn("5h", result.stdout)           # rate_limits extracted
         self.assertIn("7d", result.stdout)
         self.assertIn("Opus 4.8 (1M context)", result.stdout)  # model extracted
+
+
+class SharedCachePoisonTest(StatuslineTestCase):
+    """CS-003: a poisoned shared-rate-limits cache must not permanently win the
+    lock-free freshness comparison.
+
+    The cache is account-level and lock-free: any concurrent session's blob can
+    be published, and freshness is derived from the data itself as the monotone
+    key (resets_at, used_percentage) per window. A poisoned entry — a far-future
+    resets_at (which sorts first) paired with a huge / Infinity / NaN
+    used_percentage — would otherwise win forever and pin a permanent red ⚠️.
+    Note json.loads accepts NaN/Infinity, so those reach the cache as real
+    non-finite floats.
+
+    Each poison shape is seeded directly into the cache (simulating a malicious
+    or legacy writer that never sanitized), then a legitimate session runs and
+    must overwrite it, render its own numbers, and raise no permanent warning.
+    """
+
+    # Year-2286 resets_at — far beyond the ~30d plausibility bound, so it is the
+    # field that lets unsanitized poison win the freshness key's first element.
+    _FAR_FUTURE = 9999999999
+
+    # used_percentage poison shapes. Infinity/NaN survive json.loads and are
+    # only rejected by math.isfinite; 1e308 is finite and must be clamped.
+    _POISON_PCTS = {
+        "huge_float": 1e308,
+        "infinity": float("inf"),
+        "nan": float("nan"),
+    }
+
+    def _seed_cache(self, rate_limits):
+        """Write a shared-rate-limits.json directly (allow_nan encodes NaN/Inf)."""
+        os.makedirs(self.cache_dir, exist_ok=True)
+        path = os.path.join(self.cache_dir, "shared-rate-limits.json")
+        with open(path, "w") as f:
+            json.dump({"rate_limits": rate_limits}, f)
+
+    def _legit_payload(self):
+        # A plausible resets_at (~1h out) so the legitimate blob's own resets_at
+        # survives sanitizing and beats the poison's dropped far-future value.
+        resets_at = int(time.time()) + 3600
+        return {
+            "session_id": "legit-session",
+            "rate_limits": {
+                "five_hour": {"used_percentage": 42, "resets_at": resets_at},
+                "seven_day": {"used_percentage": 12, "resets_at": resets_at},
+            },
+            "model": {"display_name": "Opus 4.8"},
+        }
+
+    def _assert_legit_won(self, result):
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(result.stderr, "", msg=result.stderr)
+        # The legitimate 42% five-hour figure is what renders...
+        self.assertIn("42%", result.stdout)
+        # ...and nothing trips the red warning prefix (poison would pin >=85%).
+        self.assertFalse(
+            result.stdout.startswith("⚠"),
+            msg=f"unexpected permanent warning: {result.stdout!r}",
+        )
+        # The cache was overwritten with the legitimate, sanitized values.
+        cache = self.read_shared_cache()
+        self.assertIsNotNone(cache)
+        self.assertEqual(
+            cache["rate_limits"]["five_hour"]["used_percentage"], 42
+        )
+
+    def test_poisoned_percentage_is_overwritten(self):
+        # Each poison pairs a far-future resets_at with a bad percentage — the
+        # combination that wins the freshness key when left unsanitized.
+        for name, bad_pct in self._POISON_PCTS.items():
+            with self.subTest(poison=name):
+                self._seed_cache({
+                    "five_hour": {"used_percentage": bad_pct, "resets_at": self._FAR_FUTURE},
+                    "seven_day": {"used_percentage": bad_pct, "resets_at": self._FAR_FUTURE},
+                })
+                self._assert_legit_won(self.run_statusline(self._legit_payload()))
+
+    def test_poisoned_far_future_reset_is_overwritten(self):
+        # A far-future resets_at alone (with an otherwise plausible, near-max
+        # percentage) still sorts ahead of every real snapshot until bounded.
+        self._seed_cache({
+            "five_hour": {"used_percentage": 99, "resets_at": self._FAR_FUTURE},
+            "seven_day": {"used_percentage": 99, "resets_at": self._FAR_FUTURE},
+        })
+        self._assert_legit_won(self.run_statusline(self._legit_payload()))
 
 
 if __name__ == "__main__":

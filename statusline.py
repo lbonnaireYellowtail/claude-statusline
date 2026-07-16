@@ -34,6 +34,7 @@ import sys
 import os
 import re
 import json
+import math
 import time
 import shutil
 import subprocess
@@ -134,10 +135,54 @@ def rl_freshness(rl):
     return key
 
 
+# Plausibility bound for resets_at: a window may not reset more than ~30 days
+# out. A far-future resets_at is the poison that actually wins the freshness
+# comparison (it sorts first), so bounding it is what restores overwritability.
+_MAX_RESET_HORIZON = 30 * 24 * 3600
+
+
+def sanitize_rl(rl, now):
+    """Return a rate_limits blob with only trustworthy values (CS-003).
+
+    For each of five_hour / seven_day: drop non-finite numbers (rejects NaN and
+    Infinity, which json.loads happily accepts), clamp used_percentage to
+    [0,100], and keep resets_at only if it falls in a plausible window
+    (now <= resets_at <= now + ~30d). Any field failing its check is dropped.
+
+    Applied identically on BOTH sides of the sync — the cache contents on read
+    and the live payload before publish — so poison can neither be trusted nor
+    written, and the lock-free freshness invariant (same transform both sides)
+    is preserved.
+    """
+    out = {}
+    for w in ("five_hour", "seven_day"):
+        win = rl.get(w) if isinstance(rl, dict) else None
+        if not isinstance(win, dict):
+            continue
+        clean = {}
+        pct = win.get("used_percentage")
+        if isinstance(pct, (int, float)) and math.isfinite(pct):
+            clean["used_percentage"] = max(0.0, min(100.0, float(pct)))
+        reset = win.get("resets_at")
+        if (isinstance(reset, (int, float)) and math.isfinite(reset)
+                and now <= reset <= now + _MAX_RESET_HORIZON):
+            clean["resets_at"] = float(reset)
+        if clean:
+            out[w] = clean
+    return out
+
+
 def sync_rate_limits(rl):
-    """Publish rl if it's the freshest known; return (rl_to_render, from_shared)."""
+    """Publish rl if it's the freshest known; return (rl_to_render, from_shared).
+
+    Both the live payload and the shared-cache contents are sanitized before
+    they are compared, rendered, or published (CS-003), so a poisoned cache can
+    neither win the monotone freshness comparison nor be written back.
+    """
+    now = time.time()
+    rl = sanitize_rl(rl, now)
     shared = load_json(SHARED_RL) or {}
-    shared_rl = shared.get("rate_limits") or {}
+    shared_rl = sanitize_rl(shared.get("rate_limits"), now)
     mine, theirs = rl_freshness(rl), rl_freshness(shared_rl)
     if mine > theirs:
         atomic_write(SHARED_RL, {"rate_limits": rl})

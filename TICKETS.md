@@ -7,20 +7,6 @@
 
 ## Ready
 
-### [CS-003] Validate shared-cache values to stop persistent poisoning
-**Priority:** medium
-
-Acceptance criteria:
-- [ ] Sanitize rate_limits with a single helper applied on **both** cache read and pre-publish: drop non-finite values (`math.isfinite`), clamp `used_percentage` to [0,100], and **bound `resets_at` to a plausible window** (`now <= resets_at <= now + ~30d`), dropping the field otherwise
-- [ ] Bounding `resets_at` is required, not optional: the freshness key compares `resets_at` first, so clamping the percentage alone leaves the poison winning (verified). Sanitizing `resets_at` is what actually restores overwritability
-- [ ] Poisoned caches — `used_percentage: 1e308`, `Infinity`, `NaN`, and a far-future `resets_at` — can each be overwritten by a legitimate session and produce no permanent red ⚠️
-- [ ] Add regression tests for the poison-then-recover scenario across all four poison shapes
-
-Notes:
-F3 in SECURITY-ANALYSIS.md — Low/Medium local availability. Monotone key `(resets_at, used_percentage)`; max-valued poison is never overwritten (`mine > theirs` never true). Ping-pong found **percentage-clamp alone is insufficient** and that `json.loads` accepts `NaN`/`Infinity` (extra poison paths, killed by `isfinite`). Reference impl: `sanitize_rl()` + `fixed_can_overwrite()` in experiments/security-hardening. Re-run the 2-session sync simulation after the change (STANDARDS.md).
-
----
-
 ### [CS-004] Add README "Security" section documenting trust boundaries
 **Priority:** medium
 
@@ -38,6 +24,22 @@ Ships alongside CS-001..CS-003 as the v1.1.1 hardening release. Cross-reference 
 ## Blocked
 
 ## Done
+
+### [CS-003] Validate shared-cache values to stop persistent poisoning
+**Priority:** medium
+
+Acceptance criteria:
+- [x] Sanitize rate_limits with a single helper applied on **both** cache read and pre-publish: drop non-finite values (`math.isfinite`), clamp `used_percentage` to [0,100], and **bound `resets_at` to a plausible window** (`now <= resets_at <= now + ~30d`), dropping the field otherwise
+- [x] Bounding `resets_at` is required, not optional: the freshness key compares `resets_at` first, so clamping the percentage alone leaves the poison winning (verified). Sanitizing `resets_at` is what actually restores overwritability
+- [x] Poisoned caches — `used_percentage: 1e308`, `Infinity`, `NaN`, and a far-future `resets_at` — can each be overwritten by a legitimate session and produce no permanent red ⚠️
+- [x] Add regression tests for the poison-then-recover scenario across all four poison shapes
+
+Notes:
+F3 in SECURITY-ANALYSIS.md — Low/Medium local availability. Monotone key `(resets_at, used_percentage)`; max-valued poison is never overwritten (`mine > theirs` never true). Ping-pong found **percentage-clamp alone is insufficient** and that `json.loads` accepts `NaN`/`Infinity` (extra poison paths, killed by `isfinite`). Reference impl: `sanitize_rl()` + `fixed_can_overwrite()` in experiments/security-hardening. Re-run the 2-session sync simulation after the change (STANDARDS.md).
+
+Done: added `_MAX_RESET_HORIZON` (~30d) and a `sanitize_rl(rl, now)` helper (stdlib `math.isfinite`) in statusline.py that, per window, drops non-finite numbers, clamps `used_percentage` to [0,100], and keeps `resets_at` only within `[now, now+30d]`. Wired it into `sync_rate_limits` on **both** sides — the live payload before publish and the shared-cache contents on read — so the freshness comparison and the published blob are both sanitized, keeping the lock-free invariant (identical transform both sides). Regression tests in `SharedCachePoisonTest` seed a poisoned cache (far-future `resets_at` paired with `1e308`/`Infinity`/`NaN`, plus a far-future-`resets_at`-only shape) and assert a legitimate session overwrites it, renders its own 42% figure, and raises no permanent red ⚠️. Verified the tests fail without the fix.
+
+---
 
 ### [CS-002] Guard against valid-but-non-object JSON to prevent crash
 **Priority:** high
