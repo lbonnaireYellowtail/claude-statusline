@@ -139,14 +139,21 @@ def fmt_tokens(t):
 
 
 def fmt_reset(epoch):
-    """'→3h12m' until the given unix timestamp, or '' if unusable."""
+    """'→5d4h' / '→3h12m' / '→45m' until the given unix timestamp, or '' if unusable.
+
+    The 7-day window can reset up to ~168h out, so anything a day or more away
+    rolls into days (→{d}d{h}h) rather than an unreadable raw hour count.
+    """
     try:
         secs = int(epoch) - int(time.time())
     except Exception:
         return ""
     if secs <= 0:
         return ""
-    h, m = secs // 3600, (secs % 3600) // 60
+    d, rem = secs // 86400, secs % 86400
+    h, m = rem // 3600, (rem % 3600) // 60
+    if d:
+        return f" {DIM}→{d}d{h}h{RESET}"
     return f" {DIM}→{h}h{m:02d}m{RESET}" if h else f" {DIM}→{m}m{RESET}"
 
 

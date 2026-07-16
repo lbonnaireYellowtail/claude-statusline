@@ -3,7 +3,7 @@
 A one-line statusline for Claude Code that shows, in real time:
 
 ```
-🧠 ctx 62.7k (6%) | 🕐 5h 12% →4h55m | 📅 7d 10% →53h15m ⇄ | 🤖 Opus 4.8 (1M context)
+🧠 ctx 62.7k (6%) | 🕐 5h 12% →4h55m | 📅 7d 10% →2d5h ⇄ | 🤖 Opus 4.8 (1M context)
 ```
 
 - **🧠 ctx** — context tokens used, colored against a soft target (default 100k) so you
