@@ -7,23 +7,23 @@
 
 ## Ready
 
+## Blocked
+
+## Done
+
 ### [CS-004] Add README "Security" section documenting trust boundaries
 **Priority:** medium
 
 Acceptance criteria:
-- [ ] Document trust boundaries: untrusted stdin JSON, local-only shared cache, PATH-resolved `ccusage`
-- [ ] Note the `curl | bash` install risk and unverified download; publish a SHA-256 and point security-conscious users to clone+install
-- [ ] Cross-reference the F1–F3 fixes shipped in this release
-- [ ] Bump `__version__` to 1.1.1 and add a CHANGELOG entry
+- [x] Document trust boundaries: untrusted stdin JSON, local-only shared cache, PATH-resolved `ccusage`
+- [x] Note the `curl | bash` install risk and unverified download; publish a SHA-256 and point security-conscious users to clone+install
+- [x] Cross-reference the F1–F3 fixes shipped in this release
+- [x] Bump `__version__` to 1.1.1 and add a CHANGELOG entry
 
 Notes:
 Ships alongside CS-001..CS-003 as the v1.1.1 hardening release. Cross-reference ADR-0001 (docs/decisions) and cite CWE-150 precedent (CVE-2025-55754, CVE-2025-55193) as why F1 matters. Run /code-review and re-run the 2-session sync simulation before the PR.
 
----
-
-## Blocked
-
-## Done
+Done: added a "## Security" section to README.md documenting the three trust boundaries — untrusted stdin JSON (sanitized via F1/F2/F3), the local-only shared cache (validated on read and write per F3), and PATH-resolved `ccusage` (trusted-PATH assumption, fallback-only) — plus a curl|bash install-integrity note recommending SHA-256 verification and the clone/manual routes (Options B/C), and cross-references to ADR-0001 and SECURITY-ANALYSIS.md. Cited CWE-150 with CVE-2025-55754/CVE-2025-55193 as precedent for F1. Bumped `__version__` 1.1.0 → 1.1.1 and added the `[1.1.1] — 2026-07-16` CHANGELOG entry summarizing F1–F3 + the new test harness.
 
 ### [CS-003] Validate shared-cache values to stop persistent poisoning
 **Priority:** medium

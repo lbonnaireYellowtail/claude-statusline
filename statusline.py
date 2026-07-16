@@ -28,7 +28,7 @@ decreases within an account — so concurrent writers can't regress the cache.
 Pair this with statusLine.refreshInterval in settings.json so idle sessions
 poll the cache.
 """
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 import sys
 import os
