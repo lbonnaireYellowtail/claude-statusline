@@ -161,5 +161,67 @@ class ModelLabelInjectionTest(StatuslineTestCase):
         self.assertIn("Opus 4.8 (1M context)", result.stdout)
 
 
+class NonObjectJsonTest(StatuslineTestCase):
+    """CS-002: valid-but-non-object JSON must not crash the statusline.
+
+    The stdin payload is untrusted. JSON that parses successfully need not be
+    an object — top-level scalars/arrays, and objects whose keys hold the wrong
+    non-falsy type, both used to reach a `.get()` on a non-dict and raise an
+    AttributeError. Every such input must exit 0 with an empty stderr (no
+    traceback) and still print a line.
+    """
+
+    # Top-level values that are valid JSON but not an object.
+    _TOP_LEVEL = {
+        "null": "null",
+        "array": "[1,2,3]",
+        "string": '"hi"',
+        "number": "42",
+    }
+
+    # Objects where a key holds a wrong non-falsy type — the case the old
+    # `data.get(k) or {}` idiom let through (5 or {} -> 5, then 5.get(...)).
+    _NESTED = {
+        "model_is_string": {"model": "hi"},
+        "context_window_is_number": {"context_window": 5},
+        "rate_limits_is_array": {"rate_limits": [1, 2]},
+    }
+
+    def _assert_graceful(self, result):
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # A traceback would surface on stderr; there must be none.
+        self.assertEqual(result.stderr, "", msg=result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        # Something still renders (at minimum the 🤖 model segment).
+        self.assertIn("\U0001f916", result.stdout)
+
+    def test_top_level_non_object_exits_zero(self):
+        for name, raw in self._TOP_LEVEL.items():
+            with self.subTest(payload=name):
+                self._assert_graceful(self.run_statusline(raw))
+
+    def test_nested_wrong_type_exits_zero(self):
+        for name, payload in self._NESTED.items():
+            with self.subTest(payload=name):
+                self._assert_graceful(self.run_statusline(payload))
+
+    def test_wellformed_payload_still_extracts_fields(self):
+        # Guard against over-eager type checks discarding valid data.
+        payload = {
+            "context_window": {"total_input_tokens": 60541, "used_percentage": 30},
+            "rate_limits": {
+                "five_hour": {"used_percentage": 42, "resets_at": 9999999999},
+                "seven_day": {"used_percentage": 12, "resets_at": 9999999999},
+            },
+            "model": {"display_name": "Opus 4.8 (1M context)", "id": "claude-opus-4-8"},
+        }
+        result = self.run_statusline(payload)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("ctx", result.stdout)          # context_window extracted
+        self.assertIn("5h", result.stdout)           # rate_limits extracted
+        self.assertIn("7d", result.stdout)
+        self.assertIn("Opus 4.8 (1M context)", result.stdout)  # model extracted
+
+
 if __name__ == "__main__":
     unittest.main()

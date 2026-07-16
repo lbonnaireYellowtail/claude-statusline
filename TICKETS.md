@@ -7,21 +7,6 @@
 
 ## Ready
 
-### [CS-002] Guard against valid-but-non-object JSON to prevent crash
-**Priority:** high
-
-Acceptance criteria:
-- [ ] Add top-level `if not isinstance(data, dict): data = {}` after json parsing (statusline.py:66)
-- [ ] **Also guard nested access**: the `data.get(k) or {}` idiom still crashes when a key holds a wrong non-falsy type. Use a type-checked accessor (only return the value if it is a dict) at the `context_window`, `model`, `rate_limits`, and nested `current_usage` sites
-- [ ] Both top-level (`null`, `[1,2,3]`, `"hi"`, `42`) **and nested** (`{"model":"hi"}`, `{"context_window":5}`, `{"rate_limits":[1,2]}`) inputs produce a graceful statusline with exit 0 (no traceback)
-- [ ] A well-formed payload still extracts context/model/rate-limits correctly
-- [ ] Add regression tests for each top-level and nested case
-
-Notes:
-F2 in SECURITY-ANALYSIS.md — Low/robustness. **Ticket was under-scoped**: ping-pong reproduced nested crashes the top-level guard alone doesn't catch (`5 or {}` → `5`, then `.get` throws). Reference impl: `_dict_get()` + `fixed_extract()` in experiments/security-hardening.
-
----
-
 ### [CS-003] Validate shared-cache values to stop persistent poisoning
 **Priority:** medium
 
@@ -53,6 +38,23 @@ Ships alongside CS-001..CS-003 as the v1.1.1 hardening release. Cross-reference 
 ## Blocked
 
 ## Done
+
+### [CS-002] Guard against valid-but-non-object JSON to prevent crash
+**Priority:** high
+
+Acceptance criteria:
+- [x] Add top-level `if not isinstance(data, dict): data = {}` after json parsing (statusline.py:66)
+- [x] **Also guard nested access**: the `data.get(k) or {}` idiom still crashes when a key holds a wrong non-falsy type. Use a type-checked accessor (only return the value if it is a dict) at the `context_window`, `model`, `rate_limits`, and nested `current_usage` sites
+- [x] Both top-level (`null`, `[1,2,3]`, `"hi"`, `42`) **and nested** (`{"model":"hi"}`, `{"context_window":5}`, `{"rate_limits":[1,2]}`) inputs produce a graceful statusline with exit 0 (no traceback)
+- [x] A well-formed payload still extracts context/model/rate-limits correctly
+- [x] Add regression tests for each top-level and nested case
+
+Notes:
+F2 in SECURITY-ANALYSIS.md — Low/robustness. **Ticket was under-scoped**: ping-pong reproduced nested crashes the top-level guard alone doesn't catch (`5 or {}` → `5`, then `.get` throws). Reference impl: `_dict_get()` + `fixed_extract()` in experiments/security-hardening.
+
+Done: added top-level `if not isinstance(data, dict): data = {}` guard after `json.loads`, plus a `_dict_get(d, key)` type-checked accessor returning `{}` unless the value is a dict. Replaced the `data.get(k) or {}` idiom at the `context_window`, nested `current_usage`, `rate_limits`, and `model` sites. Regression tests in `NonObjectJsonTest` cover all four top-level scalars/array and the three nested wrong-type cases (each exits 0, empty stderr, no traceback) plus a well-formed-payload extraction check.
+
+---
 
 ### [CS-001] Sanitize model.display_name to block terminal escape injection
 **Priority:** high

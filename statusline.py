@@ -70,10 +70,26 @@ def sanitize_label(name, limit=64):
     cleaned = _LABEL_DISALLOWED.sub("", str(name))
     return cleaned[:limit] if cleaned else "?"
 
+
+def _dict_get(d, key):
+    """Return d[key] only if it is itself a dict, else {}.
+
+    The stdin payload is untrusted: a key may legitimately parse to a non-dict
+    (e.g. context_window: 5, rate_limits: [1, 2]). The old `d.get(k) or {}`
+    idiom only handles falsy values — a wrong non-falsy type sails through and
+    crashes the subsequent .get(). Type-checking here keeps every nested access
+    total (CWE-20 robustness).
+    """
+    v = d.get(key) if isinstance(d, dict) else None
+    return v if isinstance(v, dict) else {}
+
 payload = sys.stdin.read()
 try:
     data = json.loads(payload)
 except Exception:
+    data = {}
+# Valid JSON need not be an object: null, [1,2,3], "hi", 42 all parse fine.
+if not isinstance(data, dict):
     data = {}
 
 CACHE_DIR = os.path.expanduser("~/.cache/claude-statusline")
@@ -165,10 +181,10 @@ parts = []
 any_warn = False
 
 # ---- context window (absolute tokens vs soft target) ------------------------
-cw = data.get("context_window") or {}
+cw = _dict_get(data, "context_window")
 ctx_tokens = cw.get("total_input_tokens")
 if not isinstance(ctx_tokens, (int, float)):
-    cu = cw.get("current_usage") or {}
+    cu = _dict_get(cw, "current_usage")
     ctx_tokens = sum(
         cu.get(k, 0) or 0
         for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
@@ -182,7 +198,7 @@ if ctx_tokens:
     any_warn = any_warn or tgt_pct >= WARN
 
 # ---- rate limits (the real 5h / 7d numbers) ---------------------------------
-rl, from_shared = sync_rate_limits(data.get("rate_limits") or {})
+rl, from_shared = sync_rate_limits(_dict_get(data, "rate_limits"))
 used_rl = False
 for key, icon, label in (
     ("five_hour", "\U0001f550", "5h"),   # 🕐
@@ -245,7 +261,7 @@ if not used_rl:
         parts.append(f"{DIM}⚠️ usage unavailable{RESET}")
 
 # ---- model (last) -----------------------------------------------------------
-md = data.get("model") or {}
+md = _dict_get(data, "model")
 parts.append(f"\U0001f916 {sanitize_label(md.get('display_name') or md.get('id') or '?')}")
 
 prefix = "⚠️  " if any_warn else ""
