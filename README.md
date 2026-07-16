@@ -106,6 +106,61 @@ linearly with open terminals. On legacy Claude Code the fallback path (one cold 
 run per minute, warm cache in between) raises this to ~65 CPU-s/hour, still under 2% of
 one core.
 
+## Tests
+
+Stdlib-only regression tests drive `statusline.py` black-box (as a subprocess,
+feeding a JSON payload on stdin) with a sandboxed `HOME`, so runs never touch
+your real `~/.cache/claude-statusline`. No dependencies needed:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+## Security
+
+The statusline runs on every render with whatever data Claude Code and your
+environment hand it, so it treats those inputs as untrusted. The trust boundaries,
+and how v1.1.1 hardened each one, are:
+
+- **Untrusted stdin JSON (sanitized).** The JSON payload Claude Code pipes in on
+  every render is treated as attacker-controlled. Three fixes shipped in v1.1.1
+  cover it:
+  - **F1 — terminal-escape injection (CWE-150).** `model.display_name` (and the
+    `model.id` fallback) is passed through a printable allowlist that strips C0
+    (`\x00–\x1f`), DEL, and C1 (`\x80–\x9f`) bytes and length-bounds the result,
+    so a crafted name can't emit OSC/CSI/clear-screen/clipboard escape sequences
+    into your terminal. This is the same escape-injection class as
+    [CVE-2025-55754](https://www.cve.org/CVERecord?id=CVE-2025-55754) (Tomcat) and
+    [CVE-2025-55193](https://www.cve.org/CVERecord?id=CVE-2025-55193) (Rails).
+  - **F2 — non-object JSON.** Valid-but-non-object payloads (`null`, arrays,
+    scalars) and wrong-typed nested keys are coerced through a type-checked
+    accessor, so a malformed payload degrades gracefully instead of crashing.
+  - **F3 — see the shared cache below.**
+- **Local-only shared cache (validated on read and write).** The cross-session
+  cache at `~/.cache/claude-statusline/shared-rate-limits.json` is local to your
+  machine, but any process running as you could poison it. Every rate-limit value
+  is sanitized with the *same* transform on both cache read and pre-publish write
+  (F3): non-finite numbers (`NaN`/`Infinity`, which `json.loads` otherwise
+  accepts) are dropped, `used_percentage` is clamped to `[0, 100]`, and
+  `resets_at` is bounded to a plausible window (`now … now + ~30d`). A poisoned
+  entry can therefore always be overwritten by a legitimate session and never
+  produces a permanent red ⚠️.
+- **PATH-resolved `ccusage` (trusted PATH).** The legacy fallback resolves
+  `ccusage` via `shutil.which`, so it runs whatever that name points to on your
+  `PATH`. This assumes a trusted `PATH`; it only runs on old Claude Code versions
+  that don't send `rate_limits`, and never on the primary stdin→render path.
+
+**Install integrity.** The `curl … | bash` one-liner (Option A) executes a remote
+script unverified over the network — convenient, but you are trusting the fetch.
+Security-conscious users should prefer the **clone + installer** or **manual**
+routes (Options B/C), which let you read the script before running it. When a
+release publishes a SHA-256 for `install.sh`, verify it before piping to a shell
+(e.g. `shasum -a 256 install.sh` and compare against the published digest).
+
+The full analysis and rationale live in
+[`docs/decisions/0001-security-hardening.md`](docs/decisions/0001-security-hardening.md)
+(ADR-0001) and `SECURITY-ANALYSIS.md`.
+
 ## Requirements
 
 - **Claude Code ≥ ~2.1** (provides `rate_limits` + `context_window` on stdin)

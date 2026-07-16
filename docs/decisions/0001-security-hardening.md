@@ -97,24 +97,34 @@ terminals until the file is deleted by hand.
 **The subtle, load-bearing finding.** Clamping `used_percentage` to [0,100] **does
 not** fix this. The key compares `resets_at` **first**, and the poison's
 `resets_at` is still astronomically large, so it keeps winning. The experiment
-confirms only **bounding `resets_at`** to a plausible window (`now .. now + ~30d`)
-restores overwritability. Additionally, `json.loads` **accepts `NaN`/`Infinity`**
-(verified) — extra poison shapes that a naive numeric compare passes and that
-`math.isfinite` rejects.
+confirms only **bounding `resets_at`** restores overwritability. Additionally,
+`json.loads` **accepts `NaN`/`Infinity`** (verified) — extra poison shapes that a
+naive numeric compare passes and that `math.isfinite` rejects.
+
+**The bound must be per-window, not flat.** A first cut used a single ~30-day
+horizon. Code review caught that this only *time-boxes* the attack: a poison with
+`resets_at` inside 30 days (but far beyond any real 5h/7d window) still sorts first
+and can't be overwritten by a legit session — a red alarm pinned for up to a
+month. Because a rolling window can never legitimately reset further out than its
+own length, the horizon is keyed to each window (`five_hour` → 6h, `seven_day` →
+8d, each with slack). A poison must now claim a reset within the window's real
+length to win, and any legit session's own reset then ties/beats it — closing the
+residual. (Regression: `test_poison_inside_wide_bound_is_still_overwritten`.)
 
 **Decision.** One `sanitize_rl(rl, now)` helper — `isfinite` gate + clamp pct to
-[0,100] + bound `resets_at`, dropping any field that fails — applied on **both**
-cache read and before publish. Publishing sanitized data means a hostile payload
-can't seed poison in the first place; sanitizing on read protects against a cache
-already poisoned by another process.
+[0,100] + per-window `resets_at` bound, dropping any field that fails — applied on
+**both** cache read and before publish. Publishing sanitized data means a hostile
+payload can't seed poison in the first place; sanitizing on read protects against a
+cache already poisoned by another process.
 
 **Why this preserves the sync invariant:** sanitization is idempotent and applied
 identically on both sides of every comparison, so two honest sessions still order
 correctly by real recency — only out-of-range values are neutralized.
 
-**Do not use a fixed 30-day horizon if** Anthropic ever introduces a rate-limit
-window longer than ~30 days — the bound would start dropping legitimate
-`resets_at`. Track the real maximum window.
+**Do not use these horizons unchanged if** Anthropic changes a window's length
+(e.g. a longer `seven_day`, or a new window) — a horizon shorter than the real
+window would start dropping legitimate `resets_at`. Key each entry to the actual
+window length.
 
 **Switch trigger:** legitimate `⇄` sync stops working, or reset times render blank,
 after this lands → the `resets_at` bound is too tight; widen it to the true max

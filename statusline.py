@@ -28,12 +28,13 @@ decreases within an account — so concurrent writers can't regress the cache.
 Pair this with statusLine.refreshInterval in settings.json so idle sessions
 poll the cache.
 """
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 import sys
 import os
 import re
 import json
+import math
 import time
 import shutil
 import subprocess
@@ -57,12 +58,38 @@ CTX_TARGET = float(_env("CTX_TARGET", "100000"))
 GREEN, YELLOW, RED, DIM, RESET = (
     "\033[32m", "\033[33m", "\033[1;31m", "\033[2m", "\033[0m",
 )
-ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+# Printable allowlist for untrusted labels: drop C0 (0x00-0x1F incl.
+# ESC/newline/BEL), DEL (0x7F), and C1 (0x80-0x9F, the 8-bit escape range).
+# Whatever survives is inert text that cannot steer the terminal (CWE-150).
+_LABEL_DISALLOWED = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def sanitize_label(name, limit=64):
+    """Allowlist an untrusted label to printable characters, length-bounded."""
+    cleaned = _LABEL_DISALLOWED.sub("", str(name))
+    return cleaned[:limit] if cleaned else "?"
+
+
+def _dict_get(d, key):
+    """Return d[key] only if it is itself a dict, else {}.
+
+    The stdin payload is untrusted: a key may legitimately parse to a non-dict
+    (e.g. context_window: 5, rate_limits: [1, 2]). The old `d.get(k) or {}`
+    idiom only handles falsy values — a wrong non-falsy type sails through and
+    crashes the subsequent .get(). Type-checking here keeps every nested access
+    total (CWE-20 robustness).
+    """
+    v = d.get(key) if isinstance(d, dict) else None
+    return v if isinstance(v, dict) else {}
 
 payload = sys.stdin.read()
 try:
     data = json.loads(payload)
 except Exception:
+    data = {}
+# Valid JSON need not be an object: null, [1,2,3], "hi", 42 all parse fine.
+if not isinstance(data, dict):
     data = {}
 
 CACHE_DIR = os.path.expanduser("~/.cache/claude-statusline")
@@ -107,10 +134,58 @@ def rl_freshness(rl):
     return key
 
 
+# Plausibility bound for resets_at, PER WINDOW: a rolling window can never
+# reset further out than its own length (plus slack for clock skew / rollover).
+# A far-future resets_at sorts first in the freshness key, so a flat bound wide
+# enough to be safe (e.g. 30d) would still let a poison with resets_at inside
+# that bound win forever and pin a red alarm; keying the bound to each window's
+# real length is what actually makes poison overwritable by a legit session.
+_RESET_HORIZON = {"five_hour": 6 * 3600, "seven_day": 8 * 24 * 3600}
+
+
+def sanitize_rl(rl, now):
+    """Return a rate_limits blob with only trustworthy values (CS-003).
+
+    For each of five_hour / seven_day: drop non-finite numbers (rejects NaN and
+    Infinity, which json.loads happily accepts), clamp used_percentage to
+    [0,100], and keep resets_at only if it falls within that window's own
+    plausible horizon (now <= resets_at <= now + horizon). Any field failing
+    its check is dropped.
+
+    Applied identically on BOTH sides of the sync — the cache contents on read
+    and the live payload before publish — so poison can neither be trusted nor
+    written, and the lock-free freshness invariant (same transform both sides)
+    is preserved.
+    """
+    out = {}
+    for w in ("five_hour", "seven_day"):
+        win = rl.get(w) if isinstance(rl, dict) else None
+        if not isinstance(win, dict):
+            continue
+        clean = {}
+        pct = win.get("used_percentage")
+        if isinstance(pct, (int, float)) and math.isfinite(pct):
+            clean["used_percentage"] = max(0.0, min(100.0, float(pct)))
+        reset = win.get("resets_at")
+        if (isinstance(reset, (int, float)) and math.isfinite(reset)
+                and now <= reset <= now + _RESET_HORIZON[w]):
+            clean["resets_at"] = float(reset)
+        if clean:
+            out[w] = clean
+    return out
+
+
 def sync_rate_limits(rl):
-    """Publish rl if it's the freshest known; return (rl_to_render, from_shared)."""
+    """Publish rl if it's the freshest known; return (rl_to_render, from_shared).
+
+    Both the live payload and the shared-cache contents are sanitized before
+    they are compared, rendered, or published (CS-003), so a poisoned cache can
+    neither win the monotone freshness comparison nor be written back.
+    """
+    now = time.time()
+    rl = sanitize_rl(rl, now)
     shared = load_json(SHARED_RL) or {}
-    shared_rl = shared.get("rate_limits") or {}
+    shared_rl = sanitize_rl(shared.get("rate_limits"), now)
     mine, theirs = rl_freshness(rl), rl_freshness(shared_rl)
     if mine > theirs:
         atomic_write(SHARED_RL, {"rate_limits": rl})
@@ -161,10 +236,10 @@ parts = []
 any_warn = False
 
 # ---- context window (absolute tokens vs soft target) ------------------------
-cw = data.get("context_window") or {}
+cw = _dict_get(data, "context_window")
 ctx_tokens = cw.get("total_input_tokens")
 if not isinstance(ctx_tokens, (int, float)):
-    cu = cw.get("current_usage") or {}
+    cu = _dict_get(cw, "current_usage")
     ctx_tokens = sum(
         cu.get(k, 0) or 0
         for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
@@ -178,7 +253,7 @@ if ctx_tokens:
     any_warn = any_warn or tgt_pct >= WARN
 
 # ---- rate limits (the real 5h / 7d numbers) ---------------------------------
-rl, from_shared = sync_rate_limits(data.get("rate_limits") or {})
+rl, from_shared = sync_rate_limits(_dict_get(data, "rate_limits"))
 used_rl = False
 for key, icon, label in (
     ("five_hour", "\U0001f550", "5h"),   # 🕐
@@ -216,7 +291,8 @@ if not used_rl:
                 capture_output=True, text=True, timeout=15,
             ).stdout
             atomic_write(CCUSAGE_CACHE, {"ts": time.time(), "out": out})
-        blocks = (json.loads(out) or {}).get("blocks", [])
+        parsed = json.loads(out)
+        blocks = parsed.get("blocks", []) if isinstance(parsed, dict) else []
         now = datetime.now(timezone.utc)
         week_cutoff = now - timedelta(days=7)
         block_5h = week = 0.0
@@ -241,8 +317,8 @@ if not used_rl:
         parts.append(f"{DIM}⚠️ usage unavailable{RESET}")
 
 # ---- model (last) -----------------------------------------------------------
-md = data.get("model") or {}
-parts.append(f"\U0001f916 {md.get('display_name') or md.get('id') or '?'}")
+md = _dict_get(data, "model")
+parts.append(f"\U0001f916 {sanitize_label(md.get('display_name') or md.get('id') or '?')}")
 
 prefix = "⚠️  " if any_warn else ""
 print(prefix + " | ".join(parts))

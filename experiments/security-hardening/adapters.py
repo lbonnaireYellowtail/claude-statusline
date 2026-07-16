@@ -97,8 +97,11 @@ def vulnerable_can_overwrite(mine, cached):
     return _freshness(mine) > _freshness(cached)
 
 
-# Plausibility bound for resets_at: within the next ~30 days of `now`.
-_MAX_RESET_HORIZON = 30 * 24 * 3600
+# Plausibility bound for resets_at, PER WINDOW: a rolling window can't reset
+# further out than its own length (+ slack). A flat bound wide enough to be
+# safe still lets a poison with resets_at inside it win the freshness key
+# forever; a per-window bound is what makes poison overwritable by a legit run.
+_RESET_HORIZON = {"five_hour": 6 * 3600, "seven_day": 8 * 24 * 3600}
 
 
 def sanitize_rl(rl, now):
@@ -118,7 +121,7 @@ def sanitize_rl(rl, now):
             clean["used_percentage"] = max(0.0, min(100.0, float(pct)))
         reset = win.get("resets_at")
         if (isinstance(reset, (int, float)) and math.isfinite(reset)
-                and now <= reset <= now + _MAX_RESET_HORIZON):
+                and now <= reset <= now + _RESET_HORIZON[w]):
             clean["resets_at"] = float(reset)
         if clean:
             out[w] = clean
