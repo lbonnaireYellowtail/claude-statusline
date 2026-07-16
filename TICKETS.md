@@ -5,6 +5,37 @@
 
 ## Refined
 
+### [CS-006] Don't trust cwd as the install source in `curl | bash` mode
+**Priority:** medium
+
+Refined via ping-pong 2026-07-16 → ADR-0002 (`docs/decisions/0002-install-integrity.md`, D1) + experiment (`experiments/install-integrity/`, validated 0/4 fixed failures). Reference impl: `candidates/fixed.sh`.
+
+Acceptance criteria:
+- [ ] `install.sh` only takes the local-copy branch when the script genuinely runs from a file on disk — guard on `[ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]`, never the `$0` fallback; `SRC_DIR` is derived from `BASH_SOURCE`, never from cwd
+- [ ] In piped mode (`curl -fsSL … | bash`, where `BASH_SOURCE[0]` is unset) the installer always downloads `statusline.py` from `RAW_BASE` and never copies a `statusline.py` that happens to sit in the current working directory
+- [ ] The `git clone && ./install.sh` local-install path still copies the repo's `statusline.py` as before
+- [ ] Manual repro: running the piped one-liner from a directory containing a planted `statusline.py` installs the downloaded file, not the local one
+- [ ] `experiments/install-integrity/run.py` passes (fixed candidate safe on every scenario)
+
+Notes:
+From the 2026-07-16 pre-release security review. In piped mode `dirname "${BASH_SOURCE[0]:-$0}"` resolves to `dirname bash` = `.` = the cwd, so the `[ -f "$SRC_DIR/statusline.py" ]` branch silently installs a cwd file and skips the trusted download (install.sh:11-20). Empirically confirmed by the experiment (vulnerable candidate installs the attacker file; fixed ignores cwd). Filtered to Medium/low-confidence (attacker must both plant a file in the victim's cwd and get them to run the one-liner there) — hardening, not a blocking vuln, but a genuine logic flaw: the local-copy branch is meant only for the clone-and-run mode. Pairs with CS-007. ADR-0002 D1 records the `sh install.sh` edge case (falls through to download — safe) and its switch trigger.
+
+### [CS-007] Verify the downloaded `statusline.py` against a pinned SHA-256 (+ release automation)
+**Priority:** medium
+
+Refined via ping-pong 2026-07-16 → ADR-0002 (D2) + experiment (`experiments/install-integrity/`). Decision: pin statusline.py's digest **inside install.sh** (Option A), verify before `chmod`; keep the README manual note (Option C, repointed to statusline.py); reject same-origin `.sha256` fetch (Option B, theatre) and signing (Option D, disproportionate — switch trigger recorded). Reference impl: `candidates/fixed.sh`.
+
+Acceptance criteria:
+- [ ] `install.sh` carries a pinned `EXPECTED_SHA256` for `statusline.py`, verifies the download against it before `chmod +x`, and aborts with a clear message on mismatch
+- [ ] No `shasum`/`sha256sum` available → **fail closed** (abort with a clear message), do not silently skip verification
+- [ ] Local-copy (clone) path is not hashed against the pin — only the download is verified (no release pin exists mid-development)
+- [ ] **Release automation** computes `statusline.py`'s SHA-256 and injects it into `install.sh` (and README/release notes) at release time — the pin is generated, never hand-edited. A stale/hand-typed pin is explicitly out (fails safe but breaks every install)
+- [ ] Repoint the README install-integrity note (README.md:153-158) from `install.sh`'s own digest (chicken-and-egg in the pipe flow) to `statusline.py`'s digest
+- [ ] `experiments/install-integrity/run.py` passes (tampered download aborts non-zero, honest download installs)
+
+Notes:
+From the 2026-07-16 pre-release security review + the long-parked CS-004 follow-up (README recommends verifying a SHA-256 but none is published and the installer verifies nothing). Threat model (per user, 2026-07-16): make the published package as safe as reasonably possible for its users — defend network tampering of the download hop, silent drift from the reviewed version, and accidental corruption; not repo-compromise (that needs signing, gated on the ADR-0002 switch trigger). Also closes the still-open v1.1.1 release task to publish the install digest. Superseded ADR-0001's "unverified curl|bash install = accepted risk" note.
+
 ## Ready
 
 ## Blocked
