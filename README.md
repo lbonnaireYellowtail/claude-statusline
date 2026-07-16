@@ -34,8 +34,9 @@ Claude Code has no cross-session push, so this script syncs pull-based:
   No locks, no per-session state files.
 
 Combined with the `refreshInterval` setting (see install snippet), idle terminals pick
-up any active session's update within a couple of seconds. An idle tick costs ~44 ms
-(mostly Python startup); the cache is only written when the numbers actually advanced.
+up any active session's update within a couple of seconds. An idle tick costs ~30 ms
+(mostly Python startup — see [Performance](#performance)); the cache is only written
+when the numbers actually advanced.
 Context tokens and model stay per-session — those aren't shared state.
 
 ## Keeping context lean (why the 100k target)
@@ -68,6 +69,42 @@ ceiling. Nothing in the primary path assumes a particular tier.
 
 (The only tier-specific values are the `CCUSAGE_5H_LIMIT` / `CCUSAGE_WEEK_LIMIT` dollar
 ceilings, and those are used *only* by the legacy fallback below.)
+
+## Performance
+
+Measured with [hyperfine](https://github.com/sharkdp/hyperfine) (3 warmup runs, sandboxed
+`$HOME` so runs don't touch a live cache) on an Apple M3 Pro, macOS 26.5, Python 3.14.
+Each render path was exercised with a fixture stdin payload; cache state was reset
+between runs via `--prepare` so every iteration hits the intended path.
+
+| Render path | Wall time (mean ± σ) | CPU time | Peak RSS |
+| --- | --- | --- | --- |
+| Idle tick (render from shared cache) | 30.2 ms ± 1.0 ms | 26.6 ms | 18 MB |
+| Publish tick (write shared cache) | 31.0 ms ± 1.1 ms | 27.0 ms | 18 MB |
+| Legacy fallback, warm 60 s `ccusage` cache | 31.8 ms ± 1.2 ms | 26.9 ms | 18 MB |
+| Legacy fallback, cold (spawns `ccusage`) | 242 ms ± 22 ms | 304 ms | 112 MB |
+
+Bare `python3 -c pass` starts in ~20 ms on the same machine, so interpreter startup is
+two-thirds of a normal tick; the script's own work (parse payload, read/compare/write the
+shared cache, render) adds ~10 ms. Interpreter choice dominates: the same idle tick under
+the stock macOS Python 3.9 averages ~45–60 ms. The cold-fallback numbers are the Node
+`ccusage` process, not this script — and it only runs on old Claude Code versions without
+`rate_limits`, at most once per 60 s thanks to the cache.
+
+**What a session costs.** With `refreshInterval` polling, per open terminal, on the
+normal (rate-limits) path:
+
+| `refreshInterval` | Ticks/hour | CPU time/hour | Avg. load (one core) | Est. energy/hour* |
+| --- | --- | --- | --- | --- |
+| `2` (recommended) | 1,800 | ~49 s | ~1.4% | ~0.07 Wh |
+| `1` | 3,600 | ~97 s | ~2.7% | ~0.14 Wh |
+
+\* Assumes ~5 W incremental CPU package power during the 30 ms bursts — an
+order-of-magnitude estimate, not a measurement. At the recommended interval, a full
+8-hour day of one session costs ~0.5 Wh, well under 1% of a MacBook battery. Cost scales
+linearly with open terminals. On legacy Claude Code the fallback path (one cold `ccusage`
+run per minute, warm cache in between) raises this to ~65 CPU-s/hour, still under 2% of
+one core.
 
 ## Requirements
 
