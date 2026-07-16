@@ -106,6 +106,16 @@ linearly with open terminals. On legacy Claude Code the fallback path (one cold 
 run per minute, warm cache in between) raises this to ~65 CPU-s/hour, still under 2% of
 one core.
 
+## Tests
+
+Stdlib-only regression tests drive `statusline.py` black-box (as a subprocess,
+feeding a JSON payload on stdin) with a sandboxed `HOME`, so runs never touch
+your real `~/.cache/claude-statusline`. No dependencies needed:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
 ## Requirements
 
 - **Claude Code ≥ ~2.1** (provides `rate_limits` + `context_window` on stdin)

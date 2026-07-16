@@ -64,19 +64,19 @@ Ships alongside CS-001..CS-003 as the v1.1.1 hardening release. Cross-reference 
 
 ---
 
+## Blocked
+
+## Done
+
 ### [CS-005] Bootstrap a stdlib-only regression test harness
 **Priority:** high
 
 Acceptance criteria:
-- [ ] Add `tests/test_statusline.py` (stdlib `unittest`) that drives `statusline.py` **black-box via subprocess** with fixture stdin payloads and a sandboxed `HOME`/cache dir — mirroring how Claude Code invokes it
-- [ ] Provide shared fixture/helper plumbing so CS-001/002/003 each drop their regression tests in without reinventing setup
-- [ ] Include a smoke test of the normal rate-limits path and one document of how to run it (README or a make target)
+- [x] Add `tests/test_statusline.py` (stdlib `unittest`) that drives `statusline.py` **black-box via subprocess** with fixture stdin payloads and a sandboxed `HOME`/cache dir — mirroring how Claude Code invokes it
+- [x] Provide shared fixture/helper plumbing so CS-001/002/003 each drop their regression tests in without reinventing setup
+- [x] Include a smoke test of the normal rate-limits path and one document of how to run it (README or a make target)
 
 Notes:
 Enabling ticket — CS-001/002/003 each require a regression test but the repo currently has **zero tests**. Land this first so the three fixes share one harness. The `experiments/security-hardening` adapters are reference behaviour, not a substitute for black-box tests against the real script. Blocks CS-001, CS-002, CS-003.
 
----
-
-## Blocked
-
-## Done
+Done: `StatuslineTestCase` base (sandboxed HOME + `run_statusline(payload, env_overrides)` helper + cache read helpers) and a `SmokeTest` covering the normal context_window + rate_limits + model path. README gained a "## Tests" section.
