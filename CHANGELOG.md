@@ -2,6 +2,26 @@
 
 Versions follow [semver](https://semver.org) and match `__version__` in `statusline.py`.
 
+## [1.2.0] — 2026-08-26
+
+### Changed
+- **The `🧠 ctx` segment is now a bar.** The `ctx` label and bare token count are
+  replaced by a fixed-width gauge filling toward `STATUSLINE_CTX_TARGET`, with the
+  absolute token count kept to its right. Fill state is readable without parsing a
+  number — the point of a statusline segment you glance at rather than read.
+  Thresholds are unchanged (yellow at `CAUTION_PCT`, red + ⚠️ at `WARN_PCT`), and the
+  bar clamps at full rather than overflowing past 100% of target.
+- Bar colours are emitted as 24-bit RGB rather than ANSI 32/33/31. Fading the
+  unfilled cells needs real channel values to scale, and terminals that remap the
+  16-colour palette (Ghostty, custom themes) were repainting the gauge to a colour
+  unrelated to its state. The other segments still use the ANSI palette.
+
+### Added
+- `STATUSLINE_CTX_BAR_CELLS` (default `15`, clamped to 1–60) sets the bar width.
+- `CtxBarTest` regression tests: constant width at every fill level including past
+  100%, fill proportional to target, the three colour thresholds, the ⚠️ prefix
+  surviving the label removal, and out-of-range `CTX_BAR_CELLS` values.
+
 ## [1.1.1] — 2026-07-16
 
 ### Security
