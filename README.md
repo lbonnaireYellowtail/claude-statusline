@@ -3,13 +3,16 @@
 A one-line statusline for Claude Code that shows, in real time:
 
 ```
-🧠 ctx 62.7k (6%) | 🕐 5h 12% →4h55m | 📅 7d 10% →2d5h ⇄ | 🤖 Opus 4.8 (1M context)
+🧠 ctx 62.7k (6%) | 🕐 5h 12% →4h55m | 📅 7d 10% →2d5h $35 ⇄ | 🤖 Opus 4.8 (1M context)
 ```
 
 - **🧠 ctx** — context tokens used, colored against a soft target (default 100k) so you
   can keep sessions lean. The `(6%)` is the real fill of the full context window.
 - **🕐 5h / 📅 7d** — your actual Anthropic rate-limit usage, with time-until-reset —
   **kept in sync across all your open terminals** (see below).
+- **$35** — what the last 7 days of sessions on this machine would cost at API list
+  price (see [Weekly cost](#weekly-cost-v12)). API-key users get `💵 sess $1.20 | 7d $35`
+  in place of the plan gauges.
 - **⇄** — shown when the rate-limit numbers came from another, more active session.
 - **🤖** — the active model.
 
@@ -31,7 +34,8 @@ Claude Code has no cross-session push, so this script syncs pull-based:
 - Sessions holding staler data render from that file instead, marked with a dim `⇄`.
 - Freshness comes from the data itself — `(resets_at, used_percentage)` per window
   never decreases for an account — so concurrent writers can never regress the cache.
-  No locks, no per-session state files.
+  No locks; the rate-limit cache keeps no per-session state (the cost ledger below
+  does, by design).
 
 Combined with the `refreshInterval` setting (see install snippet), idle terminals pick
 up any active session's update within a couple of seconds. An idle tick costs ~30 ms
@@ -111,29 +115,59 @@ or **Max ($100 / $200)**, the numbers are correct with **no configuration** — 
 simply hits 100% sooner than a Max user, because the percentage is relative to their own
 ceiling. Nothing in the primary path assumes a particular tier.
 
-(The only tier-specific values are the `CCUSAGE_5H_LIMIT` / `CCUSAGE_WEEK_LIMIT` dollar
-ceilings, and those are used *only* by the legacy fallback below.)
+**API-key (pay-as-you-go) users** never receive `rate_limits`, so there is no plan gauge
+to draw. The line switches to dollars instead — see the next section.
+
+## Weekly cost (v1.2)
+
+Claude Code puts the session's running cost on the statusline's stdin as
+`cost.total_cost_usd`. It is **Claude Code's own estimate at API list price**, the same
+number `/usage` shows — not a bill. For subscribers it is what the week *would have cost*
+on the API (and becomes real money once extra usage kicks in); for API-key users it is
+the actual list-price spend. The 7-day figure **counts only sessions where this
+statusline ran on this machine**, starting from the moment you installed it, so it takes
+a week to fill in.
+
+- **Subscribers** see it as a dim tail on the 7d gauge: `📅 7d 10% →2d5h $35`.
+- **API-key users** (payload has `cost` but no `rate_limits`, once the session has
+  spent something) see `💵 sess $1.20 | 7d $35` in place of the 5h/7d gauges. Set `STATUSLINE_WEEK_BUDGET`
+  (dollars) to colour the 7d figure against a weekly budget with the usual 60% / 85%
+  thresholds; unset, it stays plain. An API-key session never borrows a subscriber
+  neighbour's synced gauges from the shared cache.
+
+How it works: each session's statusline keeps its own ledger file under
+`~/.cache/claude-statusline/cost/` (one writer per file, so no lock), adding the
+*delta* of its cumulative total to the current hour's bucket on every tick; the weekly
+figure sums the last 168 buckets across every session file. Deltas are clamped to
+`[0, $100]` per tick, totals above $10 000 and non-finite values are rejected, buckets
+are re-validated on read, and files untouched for 30 days are deleted, so a bad payload
+or a tampered file is bounded and ages out by itself. Design and evidence: ADR-0003
+([`docs/decisions/0003-weekly-cost-ledger.md`](docs/decisions/0003-weekly-cost-ledger.md))
+and `experiments/cost-ledger/`.
 
 ## Performance
 
-Measured with [hyperfine](https://github.com/sharkdp/hyperfine) (3 warmup runs, sandboxed
-`$HOME` so runs don't touch a live cache) on an Apple M3 Pro, macOS 26.5, Python 3.14.
-Each render path was exercised with a fixture stdin payload; cache state was reset
-between runs via `--prepare` so every iteration hits the intended path.
+Measured with [hyperfine](https://github.com/sharkdp/hyperfine) (3 warmup runs, 40 timed
+runs, sandboxed `$HOME` so runs don't touch a live cache) on an Apple M3 Pro, macOS 26,
+Python 3.14.3, on 2026-09-03 for v1.2.0. The fixture is the common case: a subscriber
+payload whose rate limits are no fresher than the shared cache, with 11 live session
+ledger files on disk and the session's own total unchanged (so the tick reads, never
+writes).
 
-| Render path | Wall time (mean ± σ) | CPU time | Peak RSS |
-| --- | --- | --- | --- |
-| Idle tick (render from shared cache) | 30.2 ms ± 1.0 ms | 26.6 ms | 18 MB |
-| Publish tick (write shared cache) | 31.0 ms ± 1.1 ms | 27.0 ms | 18 MB |
-| Legacy fallback, warm 60 s `ccusage` cache | 31.8 ms ± 1.2 ms | 26.9 ms | 18 MB |
-| Legacy fallback, cold (spawns `ccusage`) | 242 ms ± 22 ms | 304 ms | 112 MB |
+| Render path | Wall time (mean ± σ) | CPU time (user + sys) |
+| --- | --- | --- |
+| Idle tick, v1.2.0 (shared cache + 11 ledger files) | 33.7 ms ± 1.3 ms | 28.9 ms |
+| Bare `python3 -c pass`, same run | 28.0 ms ± 0.6 ms | 23.7 ms |
+| Idle tick, v1.1.1, same run (for comparison) | 43.3 ms ± 2.0 ms | 38.2 ms |
 
-Bare `python3 -c pass` starts in ~20 ms on the same machine, so interpreter startup is
-two-thirds of a normal tick; the script's own work (parse payload, read/compare/write the
-shared cache, render) adds ~10 ms. Interpreter choice dominates: the same idle tick under
-the stock macOS Python 3.9 averages ~45–60 ms. The cold-fallback numbers are the Node
-`ccusage` process, not this script — and it only runs on old Claude Code versions without
-`rate_limits`, at most once per 60 s thanks to the cache.
+Interpreter startup is ~85% of a tick; the script's own work (parse the payload, read
+the shared cache, `stat` + parse the ledger files, render) adds ~5 ms. v1.2.0 is ~10 ms
+faster than v1.1.1 because dropping the `ccusage` fallback also dropped the
+`subprocess`, `shutil` and `datetime` imports. The ledger read is the one part that
+scales: ~0.03 ms per live session file (measured at 200 files in
+`experiments/cost-ledger/`), and files idle for more than a week are skipped on `stat()`
+without parsing. Interpreter choice dominates: the same tick under the stock macOS
+Python 3.9 averages ~45–60 ms.
 
 **What a session costs.** With `refreshInterval` polling, per open terminal, on the
 normal (rate-limits) path:
@@ -146,9 +180,7 @@ normal (rate-limits) path:
 \* Assumes ~5 W incremental CPU package power during the 30 ms bursts — an
 order-of-magnitude estimate, not a measurement. At the recommended interval, a full
 8-hour day of one session costs ~0.5 Wh, well under 1% of a MacBook battery. Cost scales
-linearly with open terminals. On legacy Claude Code the fallback path (one cold `ccusage`
-run per minute, warm cache in between) raises this to ~65 CPU-s/hour, still under 2% of
-one core.
+linearly with open terminals.
 
 ## Tests
 
@@ -189,10 +221,19 @@ and how v1.1.1 hardened each one, are:
   `resets_at` is bounded to a plausible window (`now … now + ~30d`). A poisoned
   entry can therefore always be overwritten by a legitimate session and never
   produces a permanent red ⚠️.
-- **PATH-resolved `ccusage` (trusted PATH).** The legacy fallback resolves
-  `ccusage` via `shutil.which`, so it runs whatever that name points to on your
-  `PATH`. This assumes a trusted `PATH`; it only runs on old Claude Code versions
-  that don't send `rate_limits`, and never on the primary stdin→render path.
+- **Local-only cost ledger (validated on read and write, v1.2).** The per-session
+  files under `~/.cache/claude-statusline/cost/` are likewise local but writable by
+  any process running as you. The untrusted `session_id` is allow-listed to
+  `[A-Za-z0-9_-]{1,64}` before it becomes a filename (anything else is rendered but
+  never written, so no file has two writers and nothing lands outside the
+  directory); totals must be finite and within `[0, $10 000]`, one tick may add at
+  most $100, a total that did not grow adds nothing, only in-window hour keys are
+  read back (at most 168, never future-dated), a file whose in-window sum exceeds
+  one session's cap or whose size exceeds 64 KB reads as $0, and files untouched for
+  30 days are deleted. A forged payload or a tampered file can therefore inflate the
+  weekly figure only by a bounded amount, and the damage ages out of the 7-day window
+  by itself. The script never runs an external binary: the `ccusage` fallback (and
+  its trusted-`PATH` assumption) was removed in v1.2.0.
 
 **Install integrity.** The `curl … | bash` one-liner (Option A) executes a remote
 script unverified over the network — convenient, but you are trusting the fetch.
@@ -207,10 +248,11 @@ The full analysis and rationale live in
 
 ## Requirements
 
-- **Claude Code ≥ ~2.1** (provides `rate_limits` + `context_window` on stdin)
+- **Claude Code ≥ ~2.1** (provides `rate_limits`, `cost` + `context_window` on stdin)
 - **Python 3** on your PATH
-- `ccusage` is **only** needed as a fallback on older Claude Code versions that don't
-  send `rate_limits`. Modern versions need nothing extra.
+
+Nothing else: no Node, no `ccusage`, no network. On a Claude Code build that sends
+neither `rate_limits` nor `cost`, the line shows just the context and model segments.
 
 ## Install
 
@@ -259,12 +301,13 @@ to `1` for snappier propagation at roughly double the (small) idle cost.
 | `STATUSLINE_CTX_TARGET`  | `100000` | Soft context-token target for coloring   |
 | `STATUSLINE_CAUTION_PCT` | `60`     | Yellow at/above this % of target/limit   |
 | `STATUSLINE_WARN_PCT`    | `85`     | Red + ⚠️ at/above this %                  |
-| `STATUSLINE_5H_LIMIT`    | `50`     | (fallback only) $ ceiling for 5h block   |
-| `STATUSLINE_WEEK_LIMIT`  | `500`    | (fallback only) $ ceiling for the week   |
+| `STATUSLINE_WEEK_BUDGET` | unset    | API-key layout: colour `7d $` against this weekly $ budget |
 
 Set them in your shell profile, e.g. `export STATUSLINE_CTX_TARGET=80000`, or for one
 session only by prefixing the launch: `STATUSLINE_CTX_TARGET=400000 claude`.
-The legacy `CCUSAGE_*` names are still honored for backward compatibility.
+The legacy `CCUSAGE_*` names are still honored for the three thresholds. The old
+`STATUSLINE_5H_LIMIT` / `STATUSLINE_WEEK_LIMIT` ceilings only served the removed
+`ccusage` fallback and are now ignored.
 
 ## Troubleshooting
 
@@ -272,8 +315,14 @@ The legacy `CCUSAGE_*` names are still honored for backward compatibility.
   executable. Test it directly:
   `echo '{"model":{"display_name":"test"},"context_window":{"total_input_tokens":50000,"used_percentage":5}}' | ~/.claude/scripts/statusline.py`
 - **`$HOME` not expanding:** replace it with your full absolute path in `settings.json`.
-- **5h/7d missing:** you're on an older Claude Code; either upgrade, or `npm i -g ccusage`
-  to enable the estimated-dollars fallback.
+- **5h/7d missing, dollars shown instead:** your payload has `cost` but no `rate_limits`.
+  That is expected on an API key (pay-as-you-go) login. If it happens on Pro/Max after
+  the session's first response, upgrade Claude Code.
+- **Neither gauges nor dollars:** you're on an older Claude Code that sends neither
+  `rate_limits` nor `cost`; upgrade.
+- **7d $ looks low:** it only counts sessions where this statusline ran on this machine,
+  from install onwards; it is complete after 7 days.
 - **⇄ never appears / sync seems off:** the shared cache lives at
-  `~/.cache/claude-statusline/` — delete it to reset. Sessions opened before you added
-  `refreshInterval` to settings.json need a restart to start polling.
+  `~/.cache/claude-statusline/` — delete it to reset (the `cost/` folder inside it is the
+  weekly ledger; deleting that restarts the 7d figure from $0). Sessions opened before
+  you added `refreshInterval` to settings.json need a restart to start polling.
