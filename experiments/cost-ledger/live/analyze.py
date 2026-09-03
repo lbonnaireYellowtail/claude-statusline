@@ -5,6 +5,10 @@
 
 (1) --resume   : per session, did total_cost_usd ever DROP (reset) or CONTINUE
                  across a gap longer than GAP_MIN minutes / a "resume" marker?
+                 Also flags every process RESTART: total_duration_ms is the
+                 process's own clock, so a restart shows up as the duration
+                 advancing less than wall-clock (or going backwards), even when
+                 the cost is restored and the session_id is unchanged.
 (2) subagents  : compare the session's last payload total with a list-price scan
                  of its own transcript, main file only vs. including subagents/.
                  If the payload tracks the "incl. subagents" figure, subagent
@@ -21,6 +25,7 @@ import sys
 import time
 
 GAP_MIN = 10
+RESTART_LAG_S = 3   # duration counter fell this many seconds behind wall-clock => the process was down
 PRICES = {  # $/MTok: input, output, cache write 5m, cache write 1h, cache read (2026-09-03)
     "claude-fable-5-1": (10, 50, 12.5, 20, 0.25),
     "claude-fable-5": (10, 50, 12.5, 20, 1.0),
@@ -104,14 +109,26 @@ def main():
 
     print("Per session (chronological):")
     for sid, L in sorted(sessions.items(), key=lambda kv: kv[1][0]["ts"]):
-        totals = [(r["ts"], r["cost"].get("total_cost_usd")) for r in L if isinstance(r.get("cost"), dict)]
-        nums = [(t, v) for t, v in totals if isinstance(v, (int, float))]
-        drops, continues = [], []
+        totals = [(r["ts"], r["cost"].get("total_cost_usd"), r["cost"].get("total_duration_ms"))
+                  for r in L if isinstance(r.get("cost"), dict)]
+        nums = [(t, v) for t, v, _ in totals if isinstance(v, (int, float))]
+        drops, continues, restarts = [], [], []
         for (t0, v0), (t1, v1) in zip(nums, nums[1:]):
             if v1 < v0:
                 drops.append((t1, v0, v1))
             elif t1 - t0 > GAP_MIN * 60:
                 continues.append((t1, v0, v1, (t1 - t0) / 60))
+        # Process restart detector. total_duration_ms is the process's own clock, so
+        # while one process is alive it advances 1:1 with wall time. Claude Code
+        # restores cost AND duration from the saved session on --resume/--continue
+        # (same session_id, no drop), so the only trace of the restart is that the
+        # duration counter advanced LESS than wall time by the seconds it was down.
+        durs = [(t, v, d / 1000.0) for t, v, d in totals
+                if isinstance(v, (int, float)) and isinstance(d, (int, float))]
+        for (t0, v0, d0), (t1, v1, d1) in zip(durs, durs[1:]):
+            lost = (t1 - t0) - (d1 - d0)
+            if d1 < d0 or lost > RESTART_LAG_S:
+                restarts.append((t1, v0, v1, lost, d1 < d0))
         last = L[-1]
         print(f"- {str(sid)[:8]}  v{last.get('version')}  {last.get('model')}  {hms(L[0]['ts'])} -> {hms(last['ts'])}"
               f"  lines={len(L)}  cost: {nums[0][1] if nums else None} -> {nums[-1][1] if nums else None}"
@@ -120,6 +137,10 @@ def main():
             print(f"    RESET  at {hms(t)}: total dropped ${a:.2f} -> ${b:.2f}")
         for t, a, b, gap in continues:
             print(f"    CONTINUED across a {gap:.0f} min gap at {hms(t)}: ${a:.2f} -> ${b:.2f}")
+        for t, a, b, lost, fresh in restarts:
+            how = "duration counter reset" if fresh else f"duration lagged wall-clock by {lost:.0f}s"
+            what = "RESET" if b < a else "CONTINUED"
+            print(f"    RESTART at {hms(t)} ({how}): process came back and the total {what} ${a:.2f} -> ${b:.2f}")
         tp = last.get("transcript_path")
         if tp and nums and os.path.exists(tp):
             subs = glob.glob(os.path.join(tp[:-len(".jsonl")], "subagents", "*.jsonl")) if tp.endswith(".jsonl") else []
