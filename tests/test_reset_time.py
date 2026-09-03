@@ -20,8 +20,12 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def render(seven_day_offset_secs):
-    """Run the statusline with a 7d window resetting offset secs from now."""
-    now = int(time.time())
+    """Run the statusline with a 7d window resetting offset secs from now.
+
+    A 30 s buffer keeps the subprocess's own clock read (a few hundred ms later)
+    from crossing an exact h/m boundary and flooring →5d4h to →5d3h.
+    """
+    now = int(time.time()) + 30
     payload = {
         "session_id": "reset-test",
         "model": {"display_name": "Opus 4.8"},
