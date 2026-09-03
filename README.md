@@ -9,7 +9,7 @@ A one-line statusline for Claude Code that shows, in real time:
 - **🧠 bar** — context tokens used, drawn as a bar filling toward a soft target
   (default 100k) so you can keep sessions lean at a glance. The `(6%)` is the real
   fill of the full context window. Set `STATUSLINE_CTX_BAR=0` to get the compact
-  `🧠 ctx 62.7k (6%)` label instead (~17 columns narrower, plain ANSI colours).
+  `🧠 ctx 62.7k (6%)` label instead (~13 columns narrower, plain ANSI colours).
 - **🕐 5h / 📅 7d** — your actual Anthropic rate-limit usage, with time-until-reset —
   **kept in sync across all your open terminals** (see below).
 - **⇄** — shown when the rate-limit numbers came from another, more active session.
@@ -49,12 +49,6 @@ and speed degrade as the context fills, so it's worth **clearing context around 
 rather than letting a session sprawl. The bar goes yellow as you approach it and
 red + ⚠️ once you cross it — that's your cue to wrap up the current thread. It stays
 full past 100% rather than overflowing.
-
-**Scale the target to your window.** 100k is ~50% of a 200k window — the right cue
-there. On a 1M-context model the equivalent cue is roughly **300k**, so set
-`STATUSLINE_CTX_TARGET=300000` and you're keeping the same discipline, not relaxing it.
-What degrades a session is how much noise the context holds, not how close it sits to
-the model's maximum.
 
 To clear context *without losing your place*, hand off to a fresh session with the
 **[`/handoff`](https://github.com/mattpocock/skills/tree/main/skills/productivity/handoff)**
