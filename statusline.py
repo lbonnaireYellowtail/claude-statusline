@@ -16,6 +16,7 @@ rate_limits, we fall back to ccusage's estimated dollars.
 
 Config via env vars (legacy CCUSAGE_* names still honored):
   STATUSLINE_CTX_TARGET   soft context-token target for coloring  (default 100000)
+  STATUSLINE_CTX_BAR      1 = draw the ctx bar, 0 = plain 'ctx 62.7k' label (default 1)
   STATUSLINE_CTX_BAR_CELLS  width of the ctx bar in cells         (default 15)
   STATUSLINE_CAUTION_PCT  yellow at/above this %                  (default 60)
   STATUSLINE_WARN_PCT     red + warning at/above                  (default 85)
@@ -56,6 +57,9 @@ CAUTION = float(_env("CAUTION_PCT", "60"))
 # The ctx segment shows a bar filling toward this target, plus absolute tokens.
 CTX_TARGET = float(_env("CTX_TARGET", "100000"))
 # Bar width in cells. Clamped: an out-of-range env value should not blow up the line.
+# Bar on/off. Off falls back to the pre-1.2 `ctx 62.7k` label in ANSI colours:
+# ~17 columns narrower, and safe on terminals without 24-bit colour.
+CTX_BAR = _env("CTX_BAR", "1").strip().lower() not in ("0", "false", "no", "off")
 CTX_BAR_CELLS = max(1, min(60, int(_env("CTX_BAR_CELLS", "15"))))
 
 # Bar palette, as RGB rather than ANSI 32/33/31: the unfilled run is the same
@@ -276,10 +280,14 @@ if not isinstance(ctx_tokens, (int, float)):
     )
 if ctx_tokens:
     tgt_pct = (ctx_tokens / CTX_TARGET * 100) if CTX_TARGET > 0 else 0.0
-    bar, c = ctx_bar(tgt_pct)
     win_pct = cw.get("used_percentage")
     tail = f" {DIM}({win_pct:.0f}%){RESET}" if isinstance(win_pct, (int, float)) else ""
-    parts.append(f"{c}\U0001f9e0 {bar}{c}  {fmt_tokens(ctx_tokens)}{RESET}{tail}")  # 🧠
+    if CTX_BAR:
+        bar, c = ctx_bar(tgt_pct)
+        parts.append(f"{c}\U0001f9e0 {bar}{c}  {fmt_tokens(ctx_tokens)}{RESET}{tail}")  # 🧠
+    else:
+        c = color_for(tgt_pct)
+        parts.append(f"{c}\U0001f9e0 ctx {fmt_tokens(ctx_tokens)}{RESET}{tail}")  # 🧠
     any_warn = any_warn or tgt_pct >= WARN
 
 # ---- rate limits (the real 5h / 7d numbers) ---------------------------------

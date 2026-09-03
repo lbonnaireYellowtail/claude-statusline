@@ -8,7 +8,8 @@ A one-line statusline for Claude Code that shows, in real time:
 
 - **🧠 bar** — context tokens used, drawn as a bar filling toward a soft target
   (default 100k) so you can keep sessions lean at a glance. The `(6%)` is the real
-  fill of the full context window.
+  fill of the full context window. Set `STATUSLINE_CTX_BAR=0` to get the compact
+  `🧠 ctx 62.7k (6%)` label instead (~17 columns narrower, plain ANSI colours).
 - **🕐 5h / 📅 7d** — your actual Anthropic rate-limit usage, with time-until-reset —
   **kept in sync across all your open terminals** (see below).
 - **⇄** — shown when the rate-limit numbers came from another, more active session.
@@ -222,6 +223,7 @@ to `1` for snappier propagation at roughly double the (small) idle cost.
 | Var                      | Default  | Meaning                                  |
 | ------------------------ | -------- | ---------------------------------------- |
 | `STATUSLINE_CTX_TARGET`  | `100000` | Soft context-token target the bar fills  |
+| `STATUSLINE_CTX_BAR`     | `1`      | `0` = plain `ctx 62.7k` label, no bar    |
 | `STATUSLINE_CTX_BAR_CELLS` | `15`   | Width of the ctx bar, in cells (1–60)    |
 | `STATUSLINE_CAUTION_PCT` | `60`     | Yellow at/above this % of target/limit   |
 | `STATUSLINE_WARN_PCT`    | `85`     | Red + ⚠️ at/above this %                  |

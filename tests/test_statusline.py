@@ -366,6 +366,24 @@ class CtxBarTest(StatuslineTestCase):
         self.assertTrue(self._ctx(270000).startswith("\u26a0"))
         self.assertFalse(self._ctx(200000).startswith("\u26a0"))
 
+    def test_bar_can_be_switched_off(self):
+        # STATUSLINE_CTX_BAR=0 restores the pre-1.2 label: no bar glyphs, no
+        # 24-bit colour, plain ANSI colour + "ctx <tokens>", thresholds intact.
+        for value in ("0", "false", "off"):
+            with self.subTest(value=value):
+                out = self._ctx(60000, STATUSLINE_CTX_BAR=value)
+                self.assertIn("ctx 60.0k", out)
+                self.assertNotIn(self.BAR, out)
+                self.assertNotIn("38;2;", out)
+                self.assertIn("\033[32m", out)
+        # ... and the shared WARN threshold still colours + prefixes ⚠️.
+        out = self._ctx(270000, STATUSLINE_CTX_BAR="0")
+        self.assertTrue(out.startswith("\u26a0"))
+        self.assertIn("\033[1;31m", out)
+        # Anything else (incl. the default) keeps the bar.
+        self.assertIn(self.BAR, self._ctx(60000, STATUSLINE_CTX_BAR="1"))
+        self.assertIn(self.BAR, self._ctx(60000))
+
     def test_bar_cells_env_is_honoured_and_clamped(self):
         self.assertEqual(self._ctx(60000, STATUSLINE_CTX_BAR_CELLS="30").count(self.BAR), 30)
         # 0 and a negative width would render an empty or malformed gauge.
