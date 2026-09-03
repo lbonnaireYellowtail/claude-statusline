@@ -59,6 +59,50 @@ Invoke it with a short description of what the next session should focus on:
 
 Then start a new session (`/clear` or a fresh window) and point it at the handoff doc.
 
+### Does the target change on a 1M-context model?
+
+No. The target is an **absolute token count** on purpose, not a percentage of the
+window. What degrades a session is how many tokens the model has to attend over, and
+how much of that is stale: superseded file versions, failed attempts, noisy tool
+output. A bigger window gives you more room for that noise; it doesn't make the noise
+cheaper. That's why the segment shows two numbers: the color tracks how far the
+*thread* has sprawled (against the target), while the dim `(6%)` is how full the
+*window* is. They answer different questions.
+
+What the evidence says (as of September 2026):
+
+- **Anthropic's docs:** "more context isn't automatically better. As token count
+  grows, accuracy and recall degrade, a phenomenon known as context rot." No
+  threshold is published; the Claude Code guidance is to `/clear` between tasks and
+  keep research in subagents.
+- **Retrieval holds well past 200k, then falls off.** On Anthropic's MRCR v2
+  (8-needle) benchmark, Opus 4.6 scores 93% at 256k and 76% at 1M; Sonnet 4.6 scores
+  90% and 66%; Opus 4.7 drops to 32% at 1M. No public long-context numbers exist yet
+  for Opus 5 or the Fable models.
+- **Retrieval benchmarks are the best case**: one clean document. A coding session
+  is the worst case. Chroma's context-rot study found every model tested degraded
+  monotonically with length, and that distractors and stale information hurt more
+  than raw length does.
+- **Auto-compact is not a quality guard on 1M models.** By default it fires at the
+  context limit (about 967k on Sonnet 5), long after output has degraded. Lower it
+  with `/autocompact 500k` if you want a safety net.
+
+Practical guidance:
+
+| Situation                                                   | Target                                                                                                                              |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Normal coding thread, any model                             | Keep the 100k default and hand off by ~100–150k.                                                                                   |
+| Deliberately loading a large corpus (whole codebase, logs)  | Raise it for that session only, e.g. `STATUSLINE_CTX_TARGET=400000 claude`, and stay under about half the window on Opus-class models. |
+
+Sources: Anthropic on [context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows)
+and [context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents);
+Claude Code [best practices](https://code.claude.com/docs/en/best-practices) and
+[auto-compact defaults](https://code.claude.com/docs/en/model-config#default-auto-compact-thresholds);
+the [Opus 4.6 announcement](https://www.anthropic.com/news/claude-opus-4-6) (MRCR v2);
+Chroma's [Context Rot](https://www.trychroma.com/research/context-rot) study;
+third-party MRCR roundups by [yage.ai](https://yage.ai/share/long-context-benchmark-en-20260315.html)
+and [CodingFleet](https://codingfleet.com/blog/context-window-lie-how-well-ai-models-use-1m-tokens-2026/).
+
 ## Works on any subscription
 
 The **5h / 7d percentages come straight from Claude Code** (`rate_limits.used_percentage`),
@@ -218,7 +262,8 @@ to `1` for snappier propagation at roughly double the (small) idle cost.
 | `STATUSLINE_5H_LIMIT`    | `50`     | (fallback only) $ ceiling for 5h block   |
 | `STATUSLINE_WEEK_LIMIT`  | `500`    | (fallback only) $ ceiling for the week   |
 
-Set them in your shell profile, e.g. `export STATUSLINE_CTX_TARGET=80000`.
+Set them in your shell profile, e.g. `export STATUSLINE_CTX_TARGET=80000`, or for one
+session only by prefixing the launch: `STATUSLINE_CTX_TARGET=400000 claude`.
 The legacy `CCUSAGE_*` names are still honored for backward compatibility.
 
 ## Troubleshooting
