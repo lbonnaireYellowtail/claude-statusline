@@ -18,8 +18,7 @@ Versions follow [semver](https://semver.org) and match `__version__` in `statusl
 
 ### Added
 - `STATUSLINE_CTX_BAR` (default `1`). Set to `0` to keep the compact `ctx 62.7k` label
-  in ANSI colours — for narrow panes, or terminals without 24-bit colour support
-  (macOS Terminal.app).
+  in ANSI colours — for narrow panes, or terminals without 24-bit colour support.
 - `STATUSLINE_CTX_BAR_CELLS` (default `15`, clamped to 1–60) sets the bar width.
 - `CtxBarTest` regression tests: constant width at every fill level including past
   100%, fill proportional to target, the three colour thresholds, the ⚠️ prefix

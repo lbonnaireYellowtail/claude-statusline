@@ -58,7 +58,7 @@ CAUTION = float(_env("CAUTION_PCT", "60"))
 CTX_TARGET = float(_env("CTX_TARGET", "100000"))
 # Bar width in cells. Clamped: an out-of-range env value should not blow up the line.
 # Bar on/off. Off falls back to the pre-1.2 `ctx 62.7k` label in ANSI colours:
-# ~17 columns narrower, and safe on terminals without 24-bit colour.
+# ~13 columns narrower, and safe on terminals without 24-bit colour.
 CTX_BAR = _env("CTX_BAR", "1").strip().lower() not in ("0", "false", "no", "off")
 CTX_BAR_CELLS = max(1, min(60, int(_env("CTX_BAR_CELLS", "15"))))
 
