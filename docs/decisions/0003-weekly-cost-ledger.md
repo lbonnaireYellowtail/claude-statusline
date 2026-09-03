@@ -96,6 +96,8 @@ The per-session read cost is the one number to watch: it scales with *live* sess
 
 ## Open items to verify live before CS-008 ships
 
+Tooling: `experiments/cost-ledger/live/capture.py` (temporary statusline wrapper that logs payloads on cost change) and `live/analyze.py` (answers all three from the log). Procedure in the experiment README, "Live verification".
+
 1. `--resume`: does `total_cost_usd` continue from the previous value or restart at 0? Both are handled (D2's clamp), so this only decides which fixture is the realistic one.
 2. Subagent spend: is it folded into the parent session's `total_cost_usd`? The cross-check on this very session (list-price scan of the transcript with and without its one subagent: $6.39 vs $6.49) was too small a difference to tell. Compare `/usage` against a session that spawns a large subagent.
 3. API-key payload: confirm on an API-key login that `cost` arrives without `rate_limits`, as the docs state.

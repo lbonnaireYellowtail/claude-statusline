@@ -18,6 +18,7 @@ Acceptance criteria:
 - [ ] Weekly read sums only files whose mtime is inside the window (+1 h slack); stale files are skipped on `stat()` without parsing
 - [ ] Subscribers: dim `$N` tail on the 7d gauge (`📅 7d 2% →5d4h $35`)
 - [ ] API-key users (payload has `cost`, no `rate_limits`): `💵 sess $1.20 | 7d $35`; `STATUSLINE_WEEK_BUDGET`, if set, colours the 7d figure with the existing caution/warn thresholds
+- [ ] An API-key session must NOT render another session's rate limits from the shared cache: when the payload has `cost` but no `rate_limits`, skip the shared-cache `⇄` fallback (observed in the live-tool self-test: today's code shows the subscriber neighbour's 5h/7d gauges)
 - [ ] README: one-paragraph semantics (Claude Code's own list-price estimate; not a bill; counts only sessions where this statusline ran on this machine; starts at install) + the new cache path in the Security section's trust boundaries
 - [ ] Black-box tests in `tests/` for: delta clamp on reset, `/clear` new session, duplicate ticks, poison values, garbage ledger file, `session_id` path-traversal attempt, API-key layout switch
 - [ ] `experiments/cost-ledger/run.py` still passes; the 2-session sync simulation still passes; idle tick stays under ~35 ms on the README benchmark machine
