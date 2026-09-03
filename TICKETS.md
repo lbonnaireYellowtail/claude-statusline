@@ -22,7 +22,7 @@ Acceptance criteria:
 - [ ] README: one-paragraph semantics (Claude Code's own list-price estimate; not a bill; counts only sessions where this statusline ran on this machine; starts at install) + the new cache path in the Security section's trust boundaries
 - [ ] Black-box tests in `tests/` for: delta clamp on reset, `/clear` new session, duplicate ticks, poison values, garbage ledger file, `session_id` path-traversal attempt, API-key layout switch
 - [ ] `experiments/cost-ledger/run.py` still passes; the 2-session sync simulation still passes; idle tick stays under ~35 ms on the README benchmark machine
-- [ ] Before shipping, verify live (ADR-0003 open items): `--resume` continue-vs-reset, subagent spend attribution, API-key payload shape
+- [ ] Before shipping, verify live (ADR-0003 open items): `--resume` continue-vs-reset (circumstantial evidence 2026-09-03: resets to $0, cost is per process — confirm with the marker run), ~~subagent spend attribution~~ (done 2026-09-03: folded into the parent total), API-key payload shape
 
 Notes:
 Premise correction from research: there is no billing-precise cost locally; `/usage` and the payload field are the same client-side list-price estimate. Chosen anyway because Claude Code maintains the price table, not us. Naive "sum latest totals" fails 6/13 scenarios (window edge, idle sessions, resume-reset); today's single-file atomic-replace cache pattern loses 38–50 % of updates under concurrent sessions and must not be reused for a sum. Per-session files need no lock and are portable (no `fcntl`). Bump `__version__` to 1.2.0 (feature) together with CS-009.

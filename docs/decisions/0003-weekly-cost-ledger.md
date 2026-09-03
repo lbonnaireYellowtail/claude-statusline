@@ -98,9 +98,16 @@ The per-session read cost is the one number to watch: it scales with *live* sess
 
 Tooling: `experiments/cost-ledger/live/capture.py` (temporary statusline wrapper that logs payloads on cost change) and `live/analyze.py` (answers all three from the log). Procedure in the experiment README, "Live verification".
 
-1. `--resume`: does `total_cost_usd` continue from the previous value or restart at 0? Both are handled (D2's clamp), so this only decides which fixture is the realistic one.
-2. Subagent spend: is it folded into the parent session's `total_cost_usd`? The cross-check on this very session (list-price scan of the transcript with and without its one subagent: $6.39 vs $6.49) was too small a difference to tell. Compare `/usage` against a session that spawns a large subagent.
-3. API-key payload: confirm on an API-key login that `cost` arrives without `rate_limits`, as the docs state.
+1. `--resume`: does `total_cost_usd` continue from the previous value or restart at 0? Both are handled (D2's clamp), so this only decides which fixture is the realistic one. **Circumstantial evidence for "restart at 0" (2026-09-03, first capture):** the moment the wrapper went live, two idle sessions whose transcripts are worth $16.55 and $1.21 at list price reported `total_cost_usd: 0` *and no `rate_limits`*, which is exactly what a resumed session looks like before its process has made an API call (rate limits arrive only after the first response). A third session went $0 → $0.23 while its transcript is worth $0.72. Cost therefore appears to be **per process**, not per session id. Pending: the deliberate mark / `/exit` / `--resume` run in the README. Consequence if confirmed: the ledger sees a drop on resume, clamps the delta to 0, and the pre-resume spend was already counted by the previous process, so nothing is lost or double counted.
+2. Subagent spend: **answered, folded in** (2026-09-03, two sessions). Payload total vs list-price scan of the session transcript, main file only vs including `subagents/`:
+
+   | session | main only | incl. subagents | payload |
+   | --- | --- | --- | --- |
+   | e7dfc7e5 | $27.20 | $30.91 | $33.56 |
+   | cec5bf24 | $14.79 | $14.90 | $15.26 |
+
+   The payload sits above the main-only figure and closest to the incl.-subagents one in both cases. It also runs 2–8 % above even that scan, so the ADR's own price table slightly underestimates what Claude Code charges itself; direction unaffected, and one more reason not to own a price table (D1).
+3. API-key payload: confirm on an API-key login that `cost` arrives without `rate_limits`, as the docs state. Not yet tested (needs a Console key). Note the false positive to expect: a subscriber session *before its first API response* also shows `cost` without `rate_limits`, so judge from a session that has clearly made calls.
 
 ## Switch triggers
 
