@@ -5,6 +5,41 @@
 
 ## Refined
 
+### [CS-008] Rolling 7-day dollar figure from a per-session cost ledger (+ API-key layout)
+**Priority:** medium
+
+Refined via ping-pong 2026-09-03 → ADR-0003 (`docs/decisions/0003-weekly-cost-ledger.md`, D1–D4) + experiment (`experiments/cost-ledger/`, recommended candidate 13/13 scenarios, 0 lost updates under 8 concurrent writers). Reference impl: `experiments/cost-ledger/candidates.py` (`HourBucketsGuarded` + `PerSessionFiles`).
+
+Acceptance criteria:
+- [ ] Each tick reads `session_id` and `cost.total_cost_usd` from the payload; nothing else is consulted (no price table, no ccusage, no network)
+- [ ] Per-session ledger file `~/.cache/claude-statusline/cost/<session_id>.json` holding `last_total`, `seen`, and hourly buckets; `session_id` allow-listed to `[A-Za-z0-9_-]{1,64}` before use as a filename, anything else maps to `unknown`
+- [ ] Delta rule: `clamp(total − last_total, 0, 100)`; total rejected unless finite and `0 ≤ total ≤ 10 000`; buckets `> 100 000` dropped on read; sessions remembered 30 days; buckets pruned past 168 h; files older than 30 days deleted
+- [ ] Every value is re-validated when read back (CS-002/CS-003 posture): garbage, non-object JSON, NaN/Infinity, negatives all read as $0 without a crash
+- [ ] Weekly read sums only files whose mtime is inside the window (+1 h slack); stale files are skipped on `stat()` without parsing
+- [ ] Subscribers: dim `$N` tail on the 7d gauge (`📅 7d 2% →5d4h $35`)
+- [ ] API-key users (payload has `cost`, no `rate_limits`): `💵 sess $1.20 | 7d $35`; `STATUSLINE_WEEK_BUDGET`, if set, colours the 7d figure with the existing caution/warn thresholds
+- [ ] README: one-paragraph semantics (Claude Code's own list-price estimate; not a bill; counts only sessions where this statusline ran on this machine; starts at install) + the new cache path in the Security section's trust boundaries
+- [ ] Black-box tests in `tests/` for: delta clamp on reset, `/clear` new session, duplicate ticks, poison values, garbage ledger file, `session_id` path-traversal attempt, API-key layout switch
+- [ ] `experiments/cost-ledger/run.py` still passes; the 2-session sync simulation still passes; idle tick stays under ~35 ms on the README benchmark machine
+- [ ] Before shipping, verify live (ADR-0003 open items): `--resume` continue-vs-reset, subagent spend attribution, API-key payload shape
+
+Notes:
+Premise correction from research: there is no billing-precise cost locally; `/usage` and the payload field are the same client-side list-price estimate. Chosen anyway because Claude Code maintains the price table, not us. Naive "sum latest totals" fails 6/13 scenarios (window edge, idle sessions, resume-reset); today's single-file atomic-replace cache pattern loses 38–50 % of updates under concurrent sessions and must not be reused for a sum. Per-session files need no lock and are portable (no `fcntl`). Bump `__version__` to 1.2.0 (feature) together with CS-009.
+
+### [CS-009] Retire the ccusage fallback
+**Priority:** low
+
+Refined via ping-pong 2026-09-03 → ADR-0003 D5. Depends on CS-008 (its API-key layout is the replacement fallback).
+
+Acceptance criteria:
+- [ ] Remove the ccusage subprocess path, `CCUSAGE_CACHE`, and the `5H_LIMIT` / `WEEK_LIMIT` env handling from `statusline.py`; `subprocess` and `shutil` imports go with it
+- [ ] A payload with neither `rate_limits` nor `cost` renders the context + model segments only (no `⚠️ usage unavailable` from a missing binary)
+- [ ] README: drop the ccusage install prerequisite, the legacy `CCUSAGE_*` env docs where they only served the fallback, and the "PATH-resolved ccusage" trust boundary from the Security section
+- [ ] CHANGELOG entry; ships in the same release as CS-008
+
+Notes:
+Measured 2026-09-03: `ccusage --offline` has no embedded pricing for opus-5 / sonnet-5 / fable-5-1 and excludes them (the fallback silently under-reports); 3.7 s per run offline, 0.75 s online. `cost` predates `rate_limits` in the payload, so every build worth supporting that lacks `rate_limits` has `cost`. Do not retire if a supported Claude Code version is found to send neither field (ADR-0003 switch trigger).
+
 ### [CS-006] Don't trust cwd as the install source in `curl | bash` mode
 **Priority:** medium
 
