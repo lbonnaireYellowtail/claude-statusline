@@ -103,8 +103,8 @@ class SmokeTest(StatuslineTestCase):
         # 5h / 7d gauges from the rate_limits path.
         self.assertIn("5h", result.stdout)
         self.assertIn("7d", result.stdout)
-        # ctx segment reflects the token count.
-        self.assertIn("ctx", result.stdout)
+        # ctx segment reflects the token count (the bar replaced the "ctx" label).
+        self.assertIn("60.5k", result.stdout)
 
 
 class ModelLabelInjectionTest(StatuslineTestCase):
@@ -218,7 +218,7 @@ class NonObjectJsonTest(StatuslineTestCase):
         }
         result = self.run_statusline(payload)
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn("ctx", result.stdout)          # context_window extracted
+        self.assertIn("60.5k", result.stdout)        # context_window extracted
         self.assertIn("5h", result.stdout)           # rate_limits extracted
         self.assertIn("7d", result.stdout)
         self.assertIn("Opus 4.8 (1M context)", result.stdout)  # model extracted
@@ -321,6 +321,75 @@ class SharedCachePoisonTest(StatuslineTestCase):
             "seven_day": {"used_percentage": 100, "resets_at": twenty_days},
         })
         self._assert_legit_won(self.run_statusline(self._legit_payload()))
+
+
+class CtxBarTest(StatuslineTestCase):
+    """The ctx segment renders a fixed-width bar that tracks CTX_TARGET."""
+
+    BAR = "\u25ac"
+    OK, CAUTION, WARN = "158;206;106", "229;192;123", "224;108;117"
+
+    def _ctx(self, tokens, **env):
+        env.setdefault("STATUSLINE_CTX_TARGET", "300000")  # explicit: bar is target-relative
+        res = self.run_statusline(
+            {"context_window": {"total_input_tokens": tokens, "used_percentage": 20},
+             "model": {"display_name": "Opus 5"}},
+            env_overrides=env,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return res.stdout
+
+    def test_bar_width_is_constant(self):
+        # Filled and unfilled cells share a glyph, so the total count is the
+        # bar width at every fill level — including past 100%, where a naive
+        # implementation would either overflow or emit a negative repeat.
+        for tokens in (0, 1, 60000, 150000, 299999, 300000, 900000):
+            with self.subTest(tokens=tokens):
+                out = self._ctx(tokens)
+                if tokens:
+                    self.assertEqual(out.count(self.BAR), 15)
+
+    def test_bar_fill_tracks_target(self):
+        # 20% of 300k -> 3 of 15 cells filled, i.e. 12 left in the faded colour.
+        out = self._ctx(60000)
+        faded = out.split("\033[38;2;47;62;32m")[-1]
+        self.assertEqual(faded.count(self.BAR), 12)
+
+    def test_colour_thresholds(self):
+        for tokens, rgb in ((60000, self.OK), (200000, self.CAUTION), (270000, self.WARN)):
+            with self.subTest(tokens=tokens):
+                self.assertIn(rgb, self._ctx(tokens))
+
+    def test_warning_prefix_still_fires_on_the_bar(self):
+        # Replacing the label with a bar must not lose the ⚠️ prefix: 270k of
+        # 300k is 90%, past the shared WARN threshold.
+        self.assertTrue(self._ctx(270000).startswith("\u26a0"))
+        self.assertFalse(self._ctx(200000).startswith("\u26a0"))
+
+    def test_bar_can_be_switched_off(self):
+        # STATUSLINE_CTX_BAR=0 restores the pre-1.2 label: no bar glyphs, no
+        # 24-bit colour, plain ANSI colour + "ctx <tokens>", thresholds intact.
+        for value in ("0", "false", "off"):
+            with self.subTest(value=value):
+                out = self._ctx(60000, STATUSLINE_CTX_BAR=value)
+                self.assertIn("ctx 60.0k", out)
+                self.assertNotIn(self.BAR, out)
+                self.assertNotIn("38;2;", out)
+                self.assertIn("\033[32m", out)
+        # ... and the shared WARN threshold still colours + prefixes ⚠️.
+        out = self._ctx(270000, STATUSLINE_CTX_BAR="0")
+        self.assertTrue(out.startswith("\u26a0"))
+        self.assertIn("\033[1;31m", out)
+        # Anything else (incl. the default) keeps the bar.
+        self.assertIn(self.BAR, self._ctx(60000, STATUSLINE_CTX_BAR="1"))
+        self.assertIn(self.BAR, self._ctx(60000))
+
+    def test_bar_cells_env_is_honoured_and_clamped(self):
+        self.assertEqual(self._ctx(60000, STATUSLINE_CTX_BAR_CELLS="30").count(self.BAR), 30)
+        # 0 and a negative width would render an empty or malformed gauge.
+        self.assertEqual(self._ctx(60000, STATUSLINE_CTX_BAR_CELLS="0").count(self.BAR), 1)
+        self.assertEqual(self._ctx(60000, STATUSLINE_CTX_BAR_CELLS="-5").count(self.BAR), 1)
+        self.assertEqual(self._ctx(60000, STATUSLINE_CTX_BAR_CELLS="9999").count(self.BAR), 60)
 
 
 if __name__ == "__main__":

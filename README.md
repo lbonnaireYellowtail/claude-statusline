@@ -3,11 +3,13 @@
 A one-line statusline for Claude Code that shows, in real time:
 
 ```
-🧠 ctx 62.7k (6%) | 🕐 5h 12% →4h55m | 📅 7d 10% →2d5h $35 ⇄ | 🤖 Opus 4.8 (1M context)
+🧠 ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  62.7k (6%) | 🕐 5h 12% →4h55m | 📅 7d 10% →2d5h $35 ⇄ | 🤖 Opus 4.8 (1M context)
 ```
 
-- **🧠 ctx** — context tokens used, colored against a soft target (default 100k) so you
-  can keep sessions lean. The `(6%)` is the real fill of the full context window.
+- **🧠 bar** — context tokens used, drawn as a bar filling toward a soft target
+  (default 100k) so you can keep sessions lean at a glance. The `(6%)` is the real
+  fill of the full context window. Set `STATUSLINE_CTX_BAR=0` to get the compact
+  `🧠 ctx 62.7k (6%)` label instead (~13 columns narrower, plain ANSI colours).
 - **🕐 5h / 📅 7d** — your actual Anthropic rate-limit usage, with time-until-reset —
   **kept in sync across all your open terminals** (see below).
 - **$35** — what the last 7 days of sessions on this machine would cost at API list
@@ -16,7 +18,8 @@ A one-line statusline for Claude Code that shows, in real time:
 - **⇄** — shown when the rate-limit numbers came from another, more active session.
 - **🤖** — the active model.
 
-Colors: green → under target, yellow at 60%+, red + ⚠️ at 85%+.
+Colors: green → under target, yellow at 60%+, red + ⚠️ at 85%+. The ctx bar's unfilled
+cells are the same color faded, so the whole gauge reads as one strip.
 
 Everything comes straight from the JSON payload Claude Code pipes to the statusline on
 every render, so it's always current — no background jobs, no log parsing.
@@ -45,10 +48,11 @@ Context tokens and model stay per-session — those aren't shared state.
 
 ## Keeping context lean (why the 100k target)
 
-The `🧠 ctx` segment is colored against a **100k-token soft target** on purpose: quality
+The `🧠` bar fills against a **100k-token soft target** on purpose: quality
 and speed degrade as the context fills, so it's worth **clearing context around 100k**
-rather than letting a session sprawl. The segment goes yellow as you approach it and
-red + ⚠️ once you cross it — that's your cue to wrap up the current thread.
+rather than letting a session sprawl. The bar goes yellow as you approach it and
+red + ⚠️ once you cross it — that's your cue to wrap up the current thread. It stays
+full past 100% rather than overflowing.
 
 To clear context *without losing your place*, hand off to a fresh session with the
 **[`/handoff`](https://github.com/mattpocock/skills/tree/main/skills/productivity/handoff)**
@@ -298,7 +302,9 @@ to `1` for snappier propagation at roughly double the (small) idle cost.
 
 | Var                      | Default  | Meaning                                  |
 | ------------------------ | -------- | ---------------------------------------- |
-| `STATUSLINE_CTX_TARGET`  | `100000` | Soft context-token target for coloring   |
+| `STATUSLINE_CTX_TARGET`  | `100000` | Soft context-token target the bar fills  |
+| `STATUSLINE_CTX_BAR`     | `1`      | `0` = plain `ctx 62.7k` label, no bar    |
+| `STATUSLINE_CTX_BAR_CELLS` | `15`   | Width of the ctx bar, in cells (1–60)    |
 | `STATUSLINE_CAUTION_PCT` | `60`     | Yellow at/above this % of target/limit   |
 | `STATUSLINE_WARN_PCT`    | `85`     | Red + ⚠️ at/above this %                  |
 | `STATUSLINE_WEEK_BUDGET` | unset    | API-key layout: colour `7d $` against this weekly $ budget |

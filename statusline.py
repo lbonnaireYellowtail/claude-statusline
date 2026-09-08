@@ -25,6 +25,8 @@ a dim `$N` tail on the 7d gauge; API-key users (whose payload has `cost` but no
 
 Config via env vars (legacy CCUSAGE_* names still honored):
   STATUSLINE_CTX_TARGET   soft context-token target for coloring  (default 100000)
+  STATUSLINE_CTX_BAR      1 = draw the ctx bar, 0 = plain 'ctx 62.7k' label (default 1)
+  STATUSLINE_CTX_BAR_CELLS  width of the ctx bar in cells         (default 15)
   STATUSLINE_CAUTION_PCT  yellow at/above this %                  (default 60)
   STATUSLINE_WARN_PCT     red + warning at/above                  (default 85)
   STATUSLINE_WEEK_BUDGET  API-key users: colour the 7d $ against this (default off)
@@ -38,7 +40,7 @@ decreases within an account — so concurrent writers can't regress the cache.
 Pair this with statusLine.refreshInterval in settings.json so idle sessions
 poll the cache.
 """
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 import sys
 import os
@@ -68,8 +70,23 @@ def _env_float(name, default):
 WARN = _env_float("WARN_PCT", "85")
 CAUTION = _env_float("CAUTION_PCT", "60")
 # Soft context target — we like to keep sessions under this many tokens.
-# The ctx segment shows absolute tokens, colored against this (not the full window).
+# The ctx segment shows a bar filling toward this target, plus absolute tokens.
 CTX_TARGET = _env_float("CTX_TARGET", "100000")
+# Bar on/off. Off falls back to the pre-1.3 `ctx 62.7k` label in ANSI colours:
+# ~13 columns narrower, and safe on terminals without 24-bit colour.
+CTX_BAR = _env("CTX_BAR", "1").strip().lower() not in ("0", "false", "no", "off")
+# Bar width in cells. Clamped: an out-of-range or malformed env value should not
+# blow up the line.
+CTX_BAR_CELLS = max(1, min(60, int(_env_float("CTX_BAR_CELLS", "15"))))
+
+# Bar palette, as RGB rather than ANSI 32/33/31: the unfilled run is the same
+# colour faded, which needs a real channel value to scale, and terminals that
+# remap the 16-colour palette (Ghostty, custom themes) otherwise repaint the
+# gauge to something unrelated to its state.
+CTX_RGB_OK, CTX_RGB_CAUTION, CTX_RGB_WARN = (
+    (158, 206, 106), (229, 192, 123), (224, 108, 117),
+)
+CTX_FADE = 0.3  # unfilled cells, as a fraction of the filled colour
 # Optional weekly $ budget for API-key users; 0 / unset = no colouring.
 WEEK_BUDGET = _env_float("WEEK_BUDGET", "0")
 
@@ -367,6 +384,24 @@ def pct_gauge(icon, label, pct, suffix=""):
     return f"{c}{icon} {label} {pct:.0f}%{suffix}{RESET}", pct >= WARN
 
 
+def ctx_bar(pct):
+    """Return (bar, colour) for a ctx fill percentage.
+
+    Filled and unfilled cells use the SAME glyph, the unfilled run just dimmed,
+    so the gauge reads as one flat strip rather than a step down to a thinner
+    rail. U+25AC is vertically centred, which keeps it on the baseline of the
+    text either side of it.
+    """
+    rgb = (CTX_RGB_WARN if pct >= WARN
+           else CTX_RGB_CAUTION if pct >= CAUTION
+           else CTX_RGB_OK)
+    fg = "\033[38;2;%d;%d;%dm" % rgb
+    faded = "\033[38;2;%d;%d;%dm" % tuple(round(v * CTX_FADE) for v in rgb)
+    filled = max(0, min(CTX_BAR_CELLS, round(pct / 100 * CTX_BAR_CELLS)))
+    bar = fg + "\u25ac" * filled + faded + "\u25ac" * (CTX_BAR_CELLS - filled)
+    return bar, fg
+
+
 def fmt_tokens(t):
     """60541 -> '60.5k', 850 -> '850'."""
     return f"{t / 1000:.1f}k" if t >= 1000 else str(int(t))
@@ -410,10 +445,14 @@ if not isinstance(ctx_tokens, (int, float)):
     )
 if ctx_tokens:
     tgt_pct = (ctx_tokens / CTX_TARGET * 100) if CTX_TARGET > 0 else 0.0
-    c = color_for(tgt_pct)
     win_pct = cw.get("used_percentage")
     tail = f" {DIM}({win_pct:.0f}%){RESET}" if isinstance(win_pct, (int, float)) else ""
-    parts.append(f"{c}\U0001f9e0 ctx {fmt_tokens(ctx_tokens)}{RESET}{tail}")  # 🧠
+    if CTX_BAR:
+        bar, c = ctx_bar(tgt_pct)
+        parts.append(f"{c}\U0001f9e0 {bar}{c}  {fmt_tokens(ctx_tokens)}{RESET}{tail}")  # 🧠
+    else:
+        c = color_for(tgt_pct)
+        parts.append(f"{c}\U0001f9e0 ctx {fmt_tokens(ctx_tokens)}{RESET}{tail}")  # 🧠
     any_warn = any_warn or tgt_pct >= WARN
 
 # ---- cost ledger ------------------------------------------------------------

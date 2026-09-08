@@ -352,10 +352,12 @@ class CcusageRetiredTest(StatuslineTestCase):
     """CS-009: neither rate_limits nor cost -> ctx + model only, no fallback."""
 
     def test_neither_field_renders_ctx_and_model_only(self):
+        # CTX_BAR=0 keeps the ctx segment a fixed string, so the exact-equality
+        # assert below stays about which segments render, not how the bar is drawn.
         r = self.run_statusline({
             "context_window": {"total_input_tokens": 60541, "used_percentage": 30},
             "model": {"display_name": "Opus 5"},
-        })
+        }, env_overrides={"STATUSLINE_CTX_BAR": "0"})
         self.assertEqual(r.returncode, 0, msg=r.stderr)
         self.assertEqual(r.stderr, "")
         out = ANSI.sub("", r.stdout).strip()
