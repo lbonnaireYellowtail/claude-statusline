@@ -3,6 +3,30 @@
 
 ## In Progress
 
+### [CS-008] Rolling 7-day dollar figure from a per-session cost ledger (+ API-key layout)
+**Priority:** medium
+
+Refined via ping-pong 2026-09-03 → ADR-0003 (`docs/decisions/0003-weekly-cost-ledger.md`, D1–D4) + experiment (`experiments/cost-ledger/`, recommended candidate 13/13 scenarios, 0 lost updates under 8 concurrent writers). Reference impl: `experiments/cost-ledger/candidates.py` (`HourBucketsGuarded` + `PerSessionFiles`).
+
+Acceptance criteria:
+- [x] Each tick reads `session_id` and `cost.total_cost_usd` from the payload; nothing else is consulted (no price table, no ccusage, no network)
+- [x] Per-session ledger file `~/.cache/claude-statusline/cost/<session_id>.json` holding `last_total`, `seen`, and hourly buckets; `session_id` allow-listed to `[A-Za-z0-9_-]{1,64}` before use as a filename, anything else maps to `unknown`
+- [x] Delta rule: `clamp(total − last_total, 0, 100)`; total rejected unless finite and `0 ≤ total ≤ 10 000`; buckets `> 100 000` dropped on read; sessions remembered 30 days; buckets pruned past 168 h; files older than 30 days deleted
+- [x] Every value is re-validated when read back (CS-002/CS-003 posture): garbage, non-object JSON, NaN/Infinity, negatives all read as $0 without a crash
+- [x] Weekly read sums only files whose mtime is inside the window (+1 h slack); stale files are skipped on `stat()` without parsing
+- [x] Subscribers: dim `$N` tail on the 7d gauge (`📅 7d 2% →5d4h $35`)
+- [x] API-key users (payload has `cost`, no `rate_limits`): `💵 sess $1.20 | 7d $35`; `STATUSLINE_WEEK_BUDGET`, if set, colours the 7d figure with the existing caution/warn thresholds
+- [x] An API-key session must NOT render another session's rate limits from the shared cache: when the payload has `cost` but no `rate_limits`, skip the shared-cache `⇄` fallback (observed in the live-tool self-test: today's code shows the subscriber neighbour's 5h/7d gauges)
+- [x] README: one-paragraph semantics (Claude Code's own list-price estimate; not a bill; counts only sessions where this statusline ran on this machine; starts at install) + the new cache path in the Security section's trust boundaries
+- [x] Black-box tests in `tests/` for: delta clamp on reset, `/clear` new session, duplicate ticks, poison values, garbage ledger file, `session_id` path-traversal attempt, API-key layout switch
+- [x] `experiments/cost-ledger/run.py` still passes; the 2-session sync simulation still passes; idle tick stays under ~35 ms on the README benchmark machine
+- [ ] Before shipping, verify live (ADR-0003 open items): ~~`--resume` continue-vs-reset~~ (done 2026-09-03: cost and duration are restored on resume, same session_id, total CONTINUES), ~~subagent spend attribution~~ (done 2026-09-03: folded into the parent total), API-key payload shape (still open, needs a Console key)
+
+Notes:
+Premise correction from research: there is no billing-precise cost locally; `/usage` and the payload field are the same client-side list-price estimate. Chosen anyway because Claude Code maintains the price table, not us. Naive "sum latest totals" fails 6/13 scenarios (window edge, idle sessions, resume-reset); today's single-file atomic-replace cache pattern loses 38–50 % of updates under concurrent sessions and must not be reused for a sum. Per-session files need no lock and are portable (no `fcntl`). Bump `__version__` to 1.2.0 (feature) together with CS-009.
+
+Progress (2026-09-03): implemented in `statusline.py` (`cost_tick` / `weekly_cost` / `sanitize_ledger`, `api_key_mode` skips the shared-cache sync), tests in `tests/test_cost_ledger.py`, README "Weekly cost (v1.2)" section + Security trust boundary, CHANGELOG 1.2.0. `/code-review high` (10 findings) folded in; three deliberate deviations from the AC text above, all tightening it: (1) an unsafe `session_id` gets NO ledger file instead of `unknown.json`, because one shared file has many writers and two writers flip-flopping the baseline inflate the sum (reviewer reproduced $14 for $6.50 of spend); the same reasoning makes a total that did not grow keep its baseline rather than re-baseline downwards; (2) the API-key layout switches on the *sanitized* payload and only once `cost_total > 0`, so a subscriber's opening ticks (cost 0, no `rate_limits` before the first response) still render the synced ⇄ gauges as in v1.1.1; (3) on top of the bucket cap, only in-window ASCII hour keys are read (≤168, no future-dated keys), a file whose in-window sum exceeds one session's cap or 64 KB reads as $0, and orphaned `.tmp` files are swept with the 30-day delete. Idle ticks are read-only (a file untouched for 169 h cannot hold an in-window bucket) and an idle live session refreshes its mtime about daily so the 30-day sweep measures session idleness, not spend idleness. Remaining: the live API-key payload check (needs a Console key); everything else ships in the v1.2.0 PR.
+
 ## Refined
 
 ### [CS-006] Don't trust cwd as the install source in `curl | bash` mode
@@ -41,6 +65,22 @@ From the 2026-07-16 pre-release security review + the long-parked CS-004 follow-
 ## Blocked
 
 ## Done
+
+### [CS-009] Retire the ccusage fallback
+**Priority:** low
+
+Refined via ping-pong 2026-09-03 → ADR-0003 D5. Depends on CS-008 (its API-key layout is the replacement fallback).
+
+Acceptance criteria:
+- [x] Remove the ccusage subprocess path, `CCUSAGE_CACHE`, and the `5H_LIMIT` / `WEEK_LIMIT` env handling from `statusline.py`; `subprocess` and `shutil` imports go with it
+- [x] A payload with neither `rate_limits` nor `cost` renders the context + model segments only (no `⚠️ usage unavailable` from a missing binary)
+- [x] README: drop the ccusage install prerequisite, the legacy `CCUSAGE_*` env docs where they only served the fallback, and the "PATH-resolved ccusage" trust boundary from the Security section
+- [x] CHANGELOG entry; ships in the same release as CS-008
+
+Notes:
+Measured 2026-09-03: `ccusage --offline` has no embedded pricing for opus-5 / sonnet-5 / fable-5-1 and excludes them (the fallback silently under-reports); 3.7 s per run offline, 0.75 s online. `cost` predates `rate_limits` in the payload, so every build worth supporting that lacks `rate_limits` has `cost`. Do not retire if a supported Claude Code version is found to send neither field (ADR-0003 switch trigger).
+
+Done (2026-09-03): fallback block, `CCUSAGE_CACHE`, `datetime`/`shutil`/`subprocess` imports and the `5H_LIMIT`/`WEEK_LIMIT` reads removed from `statusline.py`; `tests/test_cost_ledger.py::CcusageRetiredTest` pins the "neither field → ctx + model only" rendering and that the old ceilings are inert. README Requirements, Config table, Performance and Troubleshooting updated; the PATH-resolved-binary trust boundary replaced by the cost-ledger one. Ships with CS-008 as v1.2.0.
 
 ### [CS-004] Add README "Security" section documenting trust boundaries
 **Priority:** medium

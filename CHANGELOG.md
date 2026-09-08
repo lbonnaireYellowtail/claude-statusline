@@ -2,7 +2,7 @@
 
 Versions follow [semver](https://semver.org) and match `__version__` in `statusline.py`.
 
-## [1.2.0] — 2026-08-26
+## [1.3.0] — 2026-09-08
 
 ### Changed
 - **The `🧠 ctx` segment is now a bar.** The `ctx` label and bare token count are
@@ -23,6 +23,51 @@ Versions follow [semver](https://semver.org) and match `__version__` in `statusl
 - `CtxBarTest` regression tests: constant width at every fill level including past
   100%, fill proportional to target, the three colour thresholds, the ⚠️ prefix
   surviving the label removal, and out-of-range `CTX_BAR_CELLS` values.
+
+## [1.2.0] — 2026-09-03
+
+### Added
+- **Rolling 7-day dollar figure** (CS-008, ADR-0003). Each tick folds the payload's
+  `cost.total_cost_usd` into a per-session ledger file under
+  `~/.cache/claude-statusline/cost/` as hourly deltas; the weekly figure sums the last
+  168 buckets across every session file on the machine. Subscribers see it as a dim
+  `$N` tail on the 7d gauge (`📅 7d 10% →2d5h $35`). It is Claude Code's own
+  list-price estimate, not a bill, and counts only sessions where this statusline ran.
+- **API-key (pay-as-you-go) layout.** A payload with `cost` but no `rate_limits`
+  renders `💵 sess $1.20 | 7d $35` instead of the plan gauges. `STATUSLINE_WEEK_BUDGET`
+  (optional) colours the 7d figure against a weekly budget with the existing
+  caution/warn thresholds. The switch is decided on the sanitized payload and only
+  once the session has spent something: a subscriber's opening ticks (cost 0, no
+  `rate_limits` before the first response) keep rendering the synced gauges as before.
+- Ledger hardening in the CS-003 posture, applied on write and read: `session_id`
+  allow-listed before use as a filename (an unsafe id is rendered but not ledgered,
+  so no file ever has two writers), totals rejected unless finite and within
+  `[0, $10 000]`, per-tick delta clamped to `[0, $100]`, a total that did not grow
+  adds nothing and keeps the baseline, only in-window ASCII hour keys are read back
+  (at most 168, never future-dated), a file whose in-window sum exceeds one session's
+  cap or whose size exceeds 64 KB reads as $0, and files or orphaned temp files
+  untouched for 30 days are deleted. Ledger files are written only when the total
+  moved, so idle ticks are read-only; an idle live session refreshes its file's mtime
+  about daily so it is never mistaken for a forgotten one.
+- Black-box tests (`tests/test_cost_ledger.py`) for the delta rule, resets, `/clear`,
+  duplicate ticks, poison totals, garbage ledger files, `session_id` path traversal,
+  window/stale handling, both layouts, and the ccusage retirement.
+
+### Removed
+- **The `ccusage` fallback** (CS-009). Its offline price table lacks every current
+  model and it cost 0.75–3.7 s per run; the API-key layout above is the replacement for
+  builds without `rate_limits`. Gone with it: the `ccusage.json` cache, the
+  `subprocess`/`shutil` imports, the PATH-resolved-binary trust boundary, and the
+  `STATUSLINE_5H_LIMIT` / `STATUSLINE_WEEK_LIMIT` (`CCUSAGE_*`) ceilings, which are
+  now ignored. A payload with neither `rate_limits` nor `cost` renders the context and
+  model segments only.
+
+### Fixed
+- An API-key session no longer borrows a subscriber neighbour's 5h/7d gauges from the
+  shared cache (`⇄`): when the payload has `cost` but no `rate_limits`, the shared-cache
+  fallback is skipped.
+- Malformed numeric env vars (`STATUSLINE_WARN_PCT=lots`) fall back to their defaults
+  instead of crashing the statusline.
 
 ## [1.1.1] — 2026-07-16
 
