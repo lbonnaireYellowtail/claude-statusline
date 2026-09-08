@@ -120,7 +120,9 @@ simply hits 100% sooner than a Max user, because the percentage is relative to t
 ceiling. Nothing in the primary path assumes a particular tier.
 
 **API-key (pay-as-you-go) users** never receive `rate_limits`, so there is no plan gauge
-to draw. The line switches to dollars instead — see the next section.
+to draw. The line switches to dollars instead — `💵 sess $1.20 | 7d $35`. You don't need a
+key to see it: [preview the layout](#preview-either-layout-without-switching-plans) by
+feeding the script the payload Claude Code would.
 
 ## Weekly cost (v1.2)
 
@@ -138,6 +140,52 @@ a week to fill in.
   (dollars) to colour the 7d figure against a weekly budget with the usual 60% / 85%
   thresholds; unset, it stays plain. An API-key session never borrows a subscriber
   neighbour's synced gauges from the shared cache.
+
+### Preview either layout without switching plans
+
+The statusline is a plain filter: it reads one JSON payload on stdin and writes one
+line. So you can see exactly what a pay-as-you-go login renders without having an API
+key — feed it the payload Claude Code would.
+
+**Point `HOME` at a throwaway directory.** The ledger and the shared rate-limit cache
+both live under `$HOME`, and a fixture payload writes to them like any other tick — a
+demo run against your real `$HOME` books fake dollars into your weekly figure and can
+publish fake rate limits to every open session.
+
+```bash
+DEMO=$(mktemp -d)
+tick() { printf '{"context_window":{"total_input_tokens":62700,"used_percentage":6},"cost":{"total_cost_usd":%s},"session_id":"%s","model":{"display_name":"Opus 5"}}' "$1" "$2"; }
+
+tick 33.80 earlier | HOME=$DEMO ./statusline.py >/dev/null   # an earlier session, to fill the week
+tick  1.20 now     | HOME=$DEMO ./statusline.py              # what you'd see right now
+```
+
+```
+🧠 ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  62.7k (6%) | 💵 sess $1.20 | 7d $35 | 🤖 Opus 5
+```
+
+Against the subscriber line, the trade is the two plan gauges for a session figure:
+
+```
+Pro / Max   🧠 ▬▬▬…  62.7k (6%) | 🕐 5h 12% →4h55m | 📅 7d 10% →2d5h $35 ⇄ | 🤖 Opus 4.8 (1M context)
+API key     🧠 ▬▬▬…  62.7k (6%) | 💵 sess $1.20 | 7d $35 | 🤖 Opus 5
+```
+
+Add a budget to give the 7d figure the colouring the plan gauges would have had —
+`STATUSLINE_WEEK_BUDGET=50` turns it yellow at $30 and red (with the ⚠️ prefix) at
+$42.50, on the same 60% / 85% thresholds as everything else:
+
+```bash
+tick 46.00 solo | HOME=$(mktemp -d) STATUSLINE_WEEK_BUDGET=50 ./statusline.py
+```
+
+```
+⚠️  🧠 ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  62.7k (6%) | 💵 sess $46 | 7d $46 | 🤖 Opus 5
+```
+
+Drop the `cost` key from the payload to see the pre-spend state, or add `rate_limits`
+to get the subscriber line back — the switch is made per tick on the payload alone, so
+one login never renders the other's layout.
 
 How it works: each session's statusline keeps its own ledger file under
 `~/.cache/claude-statusline/cost/` (one writer per file, so no lock), adding the
