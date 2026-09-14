@@ -1,7 +1,7 @@
 # ADR-0003 — Weekly dollar cost in the status line, and a layout for API-key users
 
 - **Status:** Proposed (investigation + experiment complete; implementation tracked as CS-008, CS-009). Direction taken on the user's "test out the experiment" go-ahead of 2026-09-03; the three layout/scope choices below are recorded as assumptions and are cheap to reverse before CS-008 starts.
-- **Date:** 2026-09-03
+- **Date:** 2026-09-03 (amended 2026-09-14 — see D6, which supersedes the "rolling" window of D2)
 - **Method:** ping-pong (research ↔ experiment). Every claim about Claude Code behaviour below was checked against the official docs or observed on Claude Code 2.1.259; every design claim is validated in `experiments/cost-ledger/` (see `results/report.md`).
 
 ## Context
@@ -40,7 +40,7 @@ Rejected:
 
 ### D2 — Aggregation: per-session deltas into hourly buckets, guarded
 
-Each tick computes `delta = clamp(total − last_total_for_session, 0, CAP_DELTA)` and adds it to the bucket for the current hour. The weekly figure is the sum of the last 168 buckets. Guards, applied identically on write and on read (the CS-003 principle):
+Each tick computes `delta = clamp(total − last_total_for_session, 0, CAP_DELTA)` and adds it to the bucket for the current hour. The weekly figure is the sum of the buckets inside the window (a trailing 168 hours as first shipped; **see D6**, which aligns it to the plan's own seven-day window). Guards, applied identically on write and on read (the CS-003 principle):
 
 | Guard | Value | Why |
 | --- | --- | --- |
@@ -74,6 +74,23 @@ Rejected:
 ### D5 — Retire the ccusage fallback (CS-009)
 
 The fallback exists for Claude Code builds that predate `rate_limits`. `cost` predates `rate_limits` in the payload, so every build that lacks `rate_limits` but is worth supporting has `cost`, and the D4 API-key layout is a strictly better fallback: correct prices, zero latency, no external binary. Removing it also deletes the PATH-resolved-binary trust boundary from the README's Security section. *Do not retire* if a supported Claude Code version turns out to send neither field; none is known.
+
+### D6 — Window: align the figure to the plan's seven-day window (amendment, 2026-09-14)
+
+**Supersedes the word "rolling" in the Context ask and in D2's "sum of the last 168 buckets".** Shipped in v1.4.0 as CS-010.
+
+D2 defined the figure as a trailing 168 hours and D4 put it inside the `7d` gauge. Those two decisions were taken separately and contradict each other: a subscription's seven-day allowance is a **fixed** window that empties at `rate_limits.seven_day.resets_at`, not a trailing one. So at every reset the `%` dropped to near zero while the `$` beside it carried on counting spend from before the reset — one segment, two different weeks. Measured on a real ledger the day after a reset: the line read `📅 7d 6% →6d2h $675`, of which **$555 (82 %) predated the reset**; the plan-window figure was $120. This is the bug report that prompted the amendment.
+
+Decision: `weekly_cost` takes an explicit window start. When the `seven_day` window we are about to render carries a usable `resets_at` (already bounded to the future by `sanitize_rl`), the start is `resets_at − 7 days`; otherwise — an API-key session, or a window whose `resets_at` failed its plausibility check — it stays the trailing 168 hours, which is the only meaningful week when no allowance resets. The shared-cache case aligns too: the figure follows whichever `seven_day` gauge is actually on screen, so a `⇄` line cannot contradict itself either.
+
+Consequences, accepted:
+
+- **The figure drops at each reset.** That is the point, but it is a visible behaviour change for existing users, hence the minor bump rather than a patch.
+- Retention is unchanged and stays keyed to the trailing 168 h: the display window only filters what is *summed*, never what is stored or deleted. A narrower window must not evict a bucket, or the ledger could not survive a `resets_at` that moves.
+- The bucket containing the reset instant is counted whole. Hour granularity has to round somewhere; over-reporting a fraction of one hour is the safe direction for a number people watch against a budget (D2 already accepts ±1 bucket at the other edge).
+- Subscribers and API-key users now see figures over *different* windows. The README says which is which; no label distinguishes them in the line, because for each user only one of them exists.
+
+Rejected: **relabel instead of realign** (move the `$` out of the `7d` segment, or mark it `~7d`). Cheaper, and honest, but it leaves two adjacent numbers meaning two different sevens and makes the reader do the reconciling. The alignment is what the user asked the segment to mean.
 
 ## Experiment findings (2026-09-03, `experiments/cost-ledger/`)
 

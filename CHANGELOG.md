@@ -2,6 +2,35 @@
 
 Versions follow [semver](https://semver.org) and match `__version__` in `statusline.py`.
 
+## [1.4.0] — 2026-09-14
+
+### Fixed
+- **The 7-day dollar figure now covers the same window as the `7d` percentage beside
+  it** (CS-010, ADR-0003 D6). It was a trailing 168 hours while the gauge it is
+  rendered inside tracks the plan's *fixed* seven-day allowance, so at every reset the
+  `%` dropped to near zero and the `$` carried on counting spend from before it — one
+  segment describing two different weeks. On a real ledger the day after a reset the
+  line read `📅 7d 6% →6d2h $675`, of which $555 (82%) predated the reset.
+  The figure now counts from `rate_limits.seven_day.resets_at` minus seven days, so
+  both halves of the segment empty together.
+
+  **Expect your 7d figure to drop** the first time you run this — it is dropping the
+  pre-reset spend it should never have been showing.
+
+### Changed
+- API-key sessions are unaffected: with no allowance that resets there is no window to
+  align to, so their `7d $` stays the trailing 168 hours. The same is true of a
+  subscriber whose `resets_at` fails its plausibility check.
+- Retention is unchanged. The display window only filters what is summed — buckets
+  outside it are still stored, still aged out on the 168-hour/30-day rules, so a moving
+  `resets_at` can bring spend back into view.
+
+### Added
+- `PlanWindowAlignmentTest`: the figure drops at a reset, a full window still counts
+  everything, the reset's own bucket is counted whole, the shared-cache (`⇄`) case
+  aligns to the window it renders, unusable `resets_at` values fall back to the
+  trailing week, and a narrow window never evicts a bucket.
+
 ## [1.3.0] — 2026-09-08
 
 ### Changed

@@ -66,6 +66,24 @@ From the 2026-07-16 pre-release security review + the long-parked CS-004 follow-
 
 ## Done
 
+### [CS-010] The 7d dollar figure must cover the same window as the 7d gauge
+**Priority:** high (user-reported: "the cost is still accumulating despite the week window being reset")
+
+Bug in CS-008 as shipped. ADR-0003 D2 defined the figure as a trailing 168 h; D4 rendered it inside the plan's `7d` gauge. The plan's seven-day allowance is a *fixed* window that empties at `resets_at`, so the two never agreed: at each reset the `%` dropped and the `$` kept counting pre-reset spend. Diagnosed 2026-09-10 on the live ledger — the line read `📅 7d 6% →6d2h $675` the day after a reset, of which $555 (82 %) predated it; the plan-window figure was $120. Decision recorded as ADR-0003 **D6**.
+
+Acceptance criteria:
+- [x] `weekly_cost` takes an explicit window start; `cost_window_start` derives it from the `seven_day` window that is actually rendered (`resets_at − 7 d`)
+- [x] No usable `resets_at` (API-key session, or one that failed `sanitize_rl`'s plausibility bound) falls back to the trailing 168 h
+- [x] The shared-cache (`⇄`) path aligns to the window it renders, so a borrowed gauge cannot contradict its own tail
+- [x] The window start is clamped to `[now − 168 h, now]`, so a `resets_at` at the far edge of its horizon cannot produce a negative or future-spanning window
+- [x] Retention is untouched: the stale skip and the 30-day sweep stay on the trailing 168 h, and a narrower display window never evicts a bucket
+- [x] The bucket containing the reset is counted whole (documented; rounds outward, like D2's other edge)
+- [x] Tests: figure drops at a reset, full window still counts everything, boundary bucket, `⇄` case, unusable `resets_at` fallbacks, no eviction
+- [x] README (the dollars cover the plan's window; troubleshooting note that the figure drops at each reset), CHANGELOG 1.4.0, ADR-0003 D6 amendment
+- [x] `__version__` → 1.4.0 (minor: a visible behaviour change, not a silent repair)
+
+Notes: verified against a copy of the real ledger in a sandboxed HOME — the same payload renders `$497` on 1.3.0 and `$203` on 1.4.0 (window started 2026-09-09 19:00, trailing 168 h reached back to 09-07 16:14). 59/59 tests pass. Rejected alternative: relabel the tail instead of realigning it (move it out of the `7d` segment, or mark it `~7d`) — cheaper, but leaves two adjacent numbers meaning two different weeks.
+
 ### [CS-009] Retire the ccusage fallback
 **Priority:** low
 
