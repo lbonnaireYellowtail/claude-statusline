@@ -54,6 +54,20 @@ class LedgerTestCase(StatuslineTestCase):
         self.assertIsNotNone(m, plain(result))
         return float(m.group(1))
 
+    def sub_week_usd(self, result):
+        """The '$N' tail on the subscriber's 7d gauge, as a float."""
+        m = re.search(r"7d \d+%[^$]*\$([0-9.]+)", plain(result))
+        self.assertIsNotNone(m, plain(result))
+        return float(m.group(1))
+
+    @staticmethod
+    def rl_at(reset7, p7=12):
+        """Rate limits whose seven-day window resets at `reset7`."""
+        return {
+            "five_hour": {"used_percentage": 42, "resets_at": int(time.time()) + 3600},
+            "seven_day": {"used_percentage": p7, "resets_at": reset7},
+        }
+
     def ledger_files(self):
         try:
             return sorted(os.listdir(self.cost_dir))
@@ -375,3 +389,92 @@ class CcusageRetiredTest(StatuslineTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlanWindowAlignmentTest(LedgerTestCase):
+    """The $ figure covers the window its own gauge is about (CS-010).
+
+    A subscription's seven-day allowance is fixed, not trailing: it empties at
+    `resets_at`. Reading the dollars over a trailing 168 h let them carry spend
+    from before a reset the % had already forgotten.
+    """
+
+    def seeded(self, before=50.0, after=10.0):
+        """A ledger with spend 100 h ago and 2 h ago; the reset lands between."""
+        self.write_ledger("seed.json", {"last_total": before + after, "buckets": {
+            str(CUR_H - 100): before, str(CUR_H - 2): after}})
+
+    def test_dollars_count_only_from_the_plan_window_start(self):
+        # Window reset 24 h ago -> it next resets in 6 days.
+        self.seeded()
+        r = self.tick("sub", 1.0, rate_limits=self.rl_at(time.time() + 6 * DAY))
+        self.assertAlmostEqual(self.sub_week_usd(r), 11.0, places=2)  # 10 + this tick
+
+    def test_same_ledger_over_a_full_plan_window_counts_everything(self):
+        # Window about to reset -> its start is ~168 h back, so both buckets count.
+        self.seeded()
+        r = self.tick("sub", 1.0, rate_limits=self.rl_at(time.time() + 60))
+        self.assertAlmostEqual(self.sub_week_usd(r), 61.0, places=2)
+
+    def test_figure_drops_when_the_window_resets(self):
+        # The reported bug: the % resets, the $ must reset with it. Same ledger,
+        # rendered either side of a reset on the hour -- afterwards only this
+        # session's own $1, spent in the current hour, is still in the window.
+        self.seeded(before=200.0, after=20.0)
+        before = self.tick("s", 1.0, rate_limits=self.rl_at(time.time() + 60))
+        after = self.tick("s", 1.0, rate_limits=self.rl_at(CUR_H * HOUR + 7 * DAY))
+        self.assertAlmostEqual(self.sub_week_usd(before), 221.0, places=2)
+        self.assertAlmostEqual(self.sub_week_usd(after), 1.0, places=2)
+
+    def test_bucket_holding_the_reset_is_counted_whole(self):
+        # Hour granularity rounds outward: over-report a fraction of one hour
+        # rather than lose spend the gauge still counts.
+        self.write_ledger("seed.json", {
+            "last_total": 7, "buckets": {str(CUR_H - 3): 7}})
+        reset = (CUR_H - 3) * HOUR + 1800 + 7 * DAY  # mid-bucket, 3 h ago
+        r = self.tick("sub", 1.0, rate_limits=self.rl_at(reset))
+        self.assertAlmostEqual(self.sub_week_usd(r), 8.0, places=2)
+
+    def test_api_key_session_keeps_the_trailing_week(self):
+        # No plan window to align to: the trailing 168 h is all there is.
+        self.seeded()
+        r = self.tick("api", 1.0)
+        self.assertAlmostEqual(self.week_usd(r), 61.0, places=2)
+
+    def test_unusable_resets_at_falls_back_to_the_trailing_week(self):
+        # A seven_day window whose resets_at is missing or implausible still
+        # renders a %, so it still needs a figure: the trailing week.
+        self.seeded()
+        for reset in (None, "soon", float("nan"), time.time() - DAY, time.time() + 30 * DAY):
+            with self.subTest(resets_at=reset):
+                rate_limits = self.rl_at(reset)
+                if reset is None:
+                    del rate_limits["seven_day"]["resets_at"]
+                r = self.tick("sub", 0.0, rate_limits=rate_limits)
+                self.assertAlmostEqual(self.sub_week_usd(r), 60.0, places=2)
+
+    def test_shared_cache_window_aligns_the_figure_too(self):
+        # A session rendering somebody else's fresher gauges (⇄) must read the
+        # dollars over THAT window, or the segment contradicts itself again.
+        self.seeded()
+        self.tick("sub", 1.0, rate_limits=self.rl_at(time.time() + 6 * DAY))
+        r = self.tick("quiet", 0)
+        out = plain(r)
+        self.assertIn("⇄", out)
+        self.assertAlmostEqual(self.sub_week_usd(r), 11.0, places=2)
+
+    def test_window_start_never_reaches_past_the_stored_week(self):
+        # resets_at at the far edge of its plausible horizon puts the window
+        # start in the future; clamp to now rather than render a negative span.
+        self.seeded()
+        r = self.tick("sub", 1.0, rate_limits=self.rl_at(time.time() + 8 * DAY - 60))
+        self.assertAlmostEqual(self.sub_week_usd(r), 1.0, places=2)
+
+    def test_the_narrow_window_does_not_evict_buckets(self):
+        # Display window != retention. A bucket outside the plan window must
+        # survive, or it could not come back after the next reset.
+        self.seeded()
+        self.tick("sub", 1.0, rate_limits=self.rl_at(time.time() + 6 * DAY))
+        self.assertIn("seed.json", self.ledger_files())
+        r = self.tick("api", 1.0)  # same ledger, read over the trailing week
+        self.assertAlmostEqual(self.week_usd(r), 62.0, places=2)

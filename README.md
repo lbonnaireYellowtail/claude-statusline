@@ -134,7 +134,10 @@ the actual list-price spend. The 7-day figure **counts only sessions where this
 statusline ran on this machine**, starting from the moment you installed it, so it takes
 a week to fill in.
 
-- **Subscribers** see it as a dim tail on the 7d gauge: `📅 7d 10% →2d5h $35`.
+- **Subscribers** see it as a dim tail on the 7d gauge: `📅 7d 10% →2d5h $35`. The
+  dollars cover **the same window as the percentage beside them** — your plan's own
+  seven-day allowance — so both halves of that segment empty together at the reset the
+  `→2d5h` counts down to.
 - **API-key users** (payload has `cost` but no `rate_limits`, once the session has
   spent something) see `💵 sess $1.20 | 7d $35` in place of the 5h/7d gauges. Set `STATUSLINE_WEEK_BUDGET`
   (dollars) to colour the 7d figure against a weekly budget with the usual 60% / 85%
@@ -190,7 +193,12 @@ one login never renders the other's layout.
 How it works: each session's statusline keeps its own ledger file under
 `~/.cache/claude-statusline/cost/` (one writer per file, so no lock), adding the
 *delta* of its cumulative total to the current hour's bucket on every tick; the weekly
-figure sums the last 168 buckets across every session file. Deltas are clamped to
+figure sums the buckets of every session file that fall inside the window. That window
+is whichever one the figure is rendered against: on a subscription, the plan's own
+seven-day window (`rate_limits.seven_day.resets_at` minus seven days), so the $ resets
+when the % does; with no plan window to align to — an API-key session has no allowance
+that resets — it is the trailing 168 hours. Buckets outside the window are kept, not
+dropped: a narrower window must not evict spend the ledger still needs. Deltas are clamped to
 `[0, $100]` per tick, totals above $10 000 and non-finite values are rejected, buckets
 are re-validated on read, and files untouched for 30 days are deleted, so a bad payload
 or a tampered file is bounded and ages out by itself. Design and evidence: ADR-0003
@@ -375,7 +383,9 @@ The legacy `CCUSAGE_*` names are still honored for the three thresholds. The old
 - **Neither gauges nor dollars:** you're on an older Claude Code that sends neither
   `rate_limits` nor `cost`; upgrade.
 - **7d $ looks low:** it only counts sessions where this statusline ran on this machine,
-  from install onwards; it is complete after 7 days.
+  from install onwards; it is complete after 7 days. On a subscription it also drops to
+  near zero the moment your seven-day window resets — the dollars track that window, not
+  a trailing week, so they empty when the `7d %` does.
 - **⇄ never appears / sync seems off:** the shared cache lives at
   `~/.cache/claude-statusline/` — delete it to reset (the `cost/` folder inside it is the
   weekly ledger; deleting that restarts the 7d figure from $0). Sessions opened before

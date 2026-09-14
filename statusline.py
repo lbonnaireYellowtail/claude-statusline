@@ -16,12 +16,16 @@ line is always current.
 
 Weekly cost (ADR-0003): every tick folds the session's cumulative
 `cost.total_cost_usd` into a per-session ledger file under
-~/.cache/claude-statusline/cost/ as hourly deltas; the rolling 7-day figure is
-the sum of the in-window buckets of every session file on this machine. The
-figure is Claude Code's own list-price estimate, not a bill, and only counts
-sessions where this statusline ran, starting from install. Subscribers see it as
-a dim `$N` tail on the 7d gauge; API-key users (whose payload has `cost` but no
-`rate_limits`) get `💵 sess $1.20 | 7d $35` instead of the gauges.
+~/.cache/claude-statusline/cost/ as hourly deltas; the 7-day figure is the sum
+of the in-window buckets of every session file on this machine. The window is
+the one the 7d gauge is about: on a subscription, the plan's own seven-day
+window, counting from `rate_limits.seven_day.resets_at` minus seven days, so
+the $ empties at the same moment the % does. With no plan window to align to
+(API-key sessions) it is the trailing 168 hours. The figure is Claude Code's
+own list-price estimate, not a bill, and only counts sessions where this
+statusline ran, starting from install. Subscribers see it as a dim `$N` tail on
+the 7d gauge; API-key users (whose payload has `cost` but no `rate_limits`) get
+`💵 sess $1.20 | 7d $35` instead of the gauges.
 
 Config via env vars (legacy CCUSAGE_* names still honored):
   STATUSLINE_CTX_TARGET   soft context-token target for coloring  (default 100000)
@@ -40,7 +44,7 @@ decreases within an account — so concurrent writers can't regress the cache.
 Pair this with statusLine.refreshInterval in settings.json so idle sessions
 poll the cache.
 """
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 import sys
 import os
@@ -241,7 +245,8 @@ def sync_rate_limits(rl):
 # Only the session's own statusline process writes its file (no lock needed;
 # a shared single file loses 38-50 % of concurrent updates, see the ADR). Each
 # tick adds the delta of the cumulative total to the current hour's bucket; the
-# weekly figure sums the last 168 buckets across every session file. Every
+# weekly figure sums every session file's buckets inside the displayed window
+# (cost_window_start: the plan's seven-day window, else a trailing 168 h). Every
 # guard below is applied on both write and read (CS-003 posture), so a forged
 # payload or a tampered file is bounded and ages out by itself.
 _HOUR = 3600
@@ -336,8 +341,31 @@ def cost_tick(sid, total, now):
     atomic_write(path, {"last_total": total, "seen": now, "buckets": buckets})
 
 
-def weekly_cost(now):
-    """Sum the in-window buckets of every session file on this machine.
+def cost_window_start(rl, now):
+    """The instant the dollar figure counts from.
+
+    A subscription's seven-day allowance is a FIXED window that empties at
+    `resets_at`; a trailing 168 h is a different week entirely. The dollars are
+    rendered inside the `7d %` gauge, so reading them over the trailing week
+    left the two halves of one segment describing two different weeks: the %
+    dropped at the reset while the $ carried spend from before it (82 % of the
+    figure, in the report this fixes). Align to the window the gauge is about.
+
+    Without a plan window there is nothing to align to -- an API-key session
+    has no allowance that resets -- so the figure stays the trailing 168 h.
+    `rl` is the sanitized blob we actually render, so a plan start can never
+    predate what the ledger stores (sanitize_rl bounds resets_at to the
+    future); the clamp covers a caller that has not sanitized.
+    """
+    rolling = now - _WEEK_HOURS * _HOUR
+    reset = ((rl or {}).get("seven_day") or {}).get("resets_at")
+    if not _finite(reset):
+        return rolling
+    return max(rolling, min(reset - _WEEK_HOURS * _HOUR, now))
+
+
+def weekly_cost(now, start=None):
+    """Sum every session file's buckets from `start` (default: trailing 168 h).
 
     Buckets are only ever written on a tick, so a file untouched for longer
     than the window (+1 h slack) cannot hold an in-window bucket: it is skipped
@@ -345,6 +373,14 @@ def weekly_cost(now):
     (ledgers, and orphaned .tmp files from an interrupted write) is deleted,
     which is also what forgets a session's baseline. Oversized files are junk
     by definition and are skipped unparsed.
+
+    File lifecycle (the stale skip, the 30-day forget) stays keyed to the
+    trailing 168 h whatever `start` is: it governs what may still be READ, and
+    a narrower display window must not evict a bucket the next reset brings
+    back into view. `start` only filters what is summed. The bucket holding
+    `start` is counted whole -- hour granularity has to round somewhere, and
+    over-reporting a fraction of one hour is the safe direction for a figure
+    people watch against a budget.
     """
     try:
         names = os.listdir(COST_DIR)
@@ -352,6 +388,7 @@ def weekly_cost(now):
         return 0.0
     stale = now - (_WEEK_HOURS + 1) * _HOUR
     forget = now - COST_SESSION_TTL
+    start_h = int((now - _WEEK_HOURS * _HOUR if start is None else start) // _HOUR)
     total = 0.0
     for n in names:
         path = os.path.join(COST_DIR, n)
@@ -367,7 +404,8 @@ def weekly_cost(now):
             continue
         if not n.endswith(".json") or st.st_mtime < stale or st.st_size > COST_MAX_FILE:
             continue
-        total += sum(sanitize_ledger(load_json(path), now)["buckets"].values())
+        buckets = sanitize_ledger(load_json(path), now)["buckets"]
+        total += sum(v for h, v in buckets.items() if int(h) >= start_h)
     return total
 
 
@@ -463,11 +501,11 @@ raw_total = _dict_get(data, "cost").get("total_cost_usd")
 has_cost = isinstance(raw_total, (int, float)) and not isinstance(raw_total, bool)
 cost_total = float(raw_total) if _valid_total(raw_total) else None
 now = time.time()
-week_usd = None
-if has_cost:
-    if cost_total is not None:
-        cost_tick(data.get("session_id"), cost_total, now)
-    week_usd = weekly_cost(now)
+# The ledger is written here; the weekly figure is read AFTER the rate limits
+# below, because which window it covers depends on the 7d gauge we end up
+# rendering (cost_window_start).
+if cost_total is not None:
+    cost_tick(data.get("session_id"), cost_total, now)
 
 # ---- rate limits (the real 5h / 7d numbers) ---------------------------------
 payload_rl = _dict_get(data, "rate_limits")
@@ -484,6 +522,10 @@ if api_key_mode:
     rl, from_shared = {}, False
 else:
     rl, from_shared = sync_rate_limits(payload_rl)
+
+# ---- the weekly figure, over the window that 7d gauge covers ----------------
+week_usd = weekly_cost(now, cost_window_start(rl, now)) if has_cost else None
+
 used_rl = False
 for key, icon, label in (
     ("five_hour", "\U0001f550", "5h"),   # 🕐
